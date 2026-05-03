@@ -276,7 +276,7 @@
     async function search(query, cb) {
         try {
             // Use the site's JSON search API
-            const res = await http_get(`${manifest.baseUrl}/searchapi.php?q=${encodeURIComponent(query)}&page=1`, CommonHeaders);
+            const res = await http_get(`${manifest.baseUrl}/search.php?q=${encodeURIComponent(query)}&page=1`, CommonHeaders);
             if (res && res.body) {
                 const data = JSON.parse(res.body);
                 const items = [];
