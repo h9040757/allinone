@@ -100,7 +100,7 @@
   {
     "packageName": "dev.akash.stars.4khd",
     "name": "4K HD",
-    "version": 7,
+    "version": 8,
     "baseUrl": "https://4khdhub.link",
     "description": "4K Movies and TV Shows (VOD)",
     "authors": [
@@ -118,7 +118,7 @@
   {
     "packageName": "dev.akash.stars.hdhub4u",
     "name": "HDHub4U",
-    "version": 7,
+    "version": 8,
     "baseUrl": "https://new1.hdhub4u.limo",
     "description": "Bollywood, Hollywood and Hindi Dubbed Movies & Web Series",
     "authors": [
@@ -159,8 +159,18 @@
   {
     "packageName": "dev.akash.stars.moviesdrive",
     "name": "Movies Drive",
-    "version": 3,
-    "baseUrl": "https://new1.moviesdrives.my",
+    "version": 4,
+    "baseUrl": "https://new2.moviesdrives.my",
+    "domains": [
+      {
+        "name": "new2.moviesdrives.my",
+        "url": "https://new2.moviesdrives.my"
+      },
+      {
+        "name": "moviesdrive.forum",
+        "url": "https://moviesdrive.forum"
+      }
+    ],
     "description": "Premium VOD Scraper with metadata sync",
     "authors": [
       "Akash"
