@@ -28,28 +28,79 @@
         }
         matches(selector) {
             if (!this.tag) return false;
-            if (selector.includes(".")) {
-                const parts = selector.split(".");
-                const t = parts[0];
-                const c = parts[1];
-                const tagMatch = !t || this.tag === t.toLowerCase();
-                const classMatch = (this.attrs.class || "").split(/\s+/).includes(c);
-                return tagMatch && classMatch;
+            selector = String(selector || "").trim();
+            if (!selector) return false;
+
+            const idMatch = selector.match(/^([a-z0-9-]*)#([a-z0-9_-]+)$/i);
+            if (idMatch) {
+                const [, tagName, id] = idMatch;
+                return (!tagName || this.tag === tagName.toLowerCase()) && this.attrs.id === id;
             }
             if (selector.startsWith("#")) return this.attrs.id === selector.slice(1);
+
+            const attrMatch = selector.match(/^([a-z0-9-]*)\[([a-z0-9-]+)(?:[*^$]?=(["']?)([^"'\]]+)\3)?\]$/i);
+            if (attrMatch) {
+                const [, tagName, attrName, , attrValue] = attrMatch;
+                if (tagName && this.tag !== tagName.toLowerCase()) return false;
+                const actual = this.attr(attrName.toLowerCase());
+                return attrValue === undefined ? actual !== "" : actual.includes(attrValue);
+            }
+
+            const parts = selector.split(".");
+            const tagName = parts[0];
+            const classes = parts.slice(1).filter(Boolean);
+            if (classes.length > 0) {
+                const tagMatch = !tagName || this.tag === tagName.toLowerCase();
+                const nodeClasses = (this.attrs.class || "").split(/\s+/);
+                return tagMatch && classes.every(c => nodeClasses.includes(c));
+            }
+
             return this.tag === selector.toLowerCase();
         }
-        selectFirst(selector) {
+        collect(selector, out) {
             for (const c of this.children) {
-                if (c.matches(selector)) return c;
-                const r = c.selectFirst(selector);
-                if (r) return r;
+                if (c.matches(selector)) out.push(c);
+                c.collect(selector, out);
             }
-            return null;
+        }
+        selectFirst(selector) {
+            const matches = this.select(selector);
+            return matches[0] || null;
         }
         first() { return this; }
         find(selector) { return this.selectFirst(selector); }
         select(selector, out = []) {
+            selector = String(selector || "").trim();
+            if (!selector) return out;
+            if (selector.includes(">")) {
+                const parts = selector.split(">").map(s => s.trim()).filter(Boolean);
+                let current = [this];
+                parts.forEach((part, idx) => {
+                    const next = [];
+                    current.forEach(node => {
+                        if (idx === 0) {
+                            node.collect(part, next);
+                        } else {
+                            node.children.forEach(child => {
+                                if (child.matches && child.matches(part)) next.push(child);
+                            });
+                        }
+                    });
+                    current = next;
+                });
+                out.push(...current);
+                return out;
+            }
+            if (selector.includes(" ")) {
+                let current = [this];
+                selector.split(/\s+/).forEach(part => {
+                    const next = [];
+                    current.forEach(node => node.collect(part, next));
+                    current = next;
+                });
+                out.push(...current);
+                return out;
+            }
             for (const c of this.children) {
                 if (c.matches(selector)) out.push(c);
                 c.select(selector, out);
@@ -116,11 +167,30 @@
 
     const CommonHeaders = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" };
     const MetaUrl = "https://aiometadata.elfhosted.com/stremio/9197a4a9-2f5b-4911-845e-8704c520bdf7/meta";
+    const DomainConfigUrl = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json";
+    let cachedBaseUrl = null;
 
-    function fixUrl(u) {
+    async function getBaseUrl() {
+        if (cachedBaseUrl) return cachedBaseUrl;
+        const fallback = String(manifest.baseUrl || "https://moviesdrive.forum").replace(/\/+$/, "");
+        try {
+            const res = await http_get(DomainConfigUrl, CommonHeaders);
+            const remote = JSON.parse(res?.body || "{}").moviesdrive;
+            cachedBaseUrl = String(remote || fallback).replace(/\/+$/, "");
+        } catch {
+            cachedBaseUrl = fallback;
+        }
+        return cachedBaseUrl;
+    }
+
+    function fixUrl(u, base) {
         if (!u) return "";
         if (u.startsWith("//")) return "https:" + u;
-        if (u.startsWith("/")) return manifest.baseUrl + u;
+        if (u.startsWith("/")) return (base || cachedBaseUrl || String(manifest.baseUrl || "").replace(/\/+$/, "")) + u;
+        try {
+            const parsed = new URL(u, base || cachedBaseUrl || manifest.baseUrl);
+            return parsed.href;
+        } catch {}
         return u;
     }
 
@@ -140,6 +210,161 @@
                   .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
                   .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
                   .replace(/&#8211;/g, "–").replace(/&#8212;/g, "—");
+    }
+
+    function cleanText(value) {
+        return unescapeHTML(String(value || "")).replace(/\s+/g, " ").trim();
+    }
+
+    function inferType(title) {
+        return /episode|season\s*\d+|series/i.test(String(title || "")) ? "series" : "movie";
+    }
+
+    function toSearchItemFromAnchor(anchor, baseUrl) {
+        const title = cleanText((anchor.find("p") || anchor.find("h2") || anchor.find("h3") || anchor.find(".poster-title"))?.text())
+            .replace(/^Download\s+/i, "");
+        const href = fixUrl(anchor.attr("href"), baseUrl);
+        const img = anchor.find("img");
+        const poster = fixUrl(img?.attr("src") || img?.attr("data-src"), baseUrl);
+        if (!href || !title || href.includes("javascript")) return null;
+        return new MultimediaItem({ title, url: href, posterUrl: poster, type: inferType(title) });
+    }
+
+    function parseCards(html, baseUrl) {
+        const doc = JsoupLite.parse(html);
+        const items = [];
+        const seen = new Set();
+        ["#moviesGridMain > a", "a.movie-card", "a.poster-card"].flatMap(selector => doc.select(selector)).forEach(anchor => {
+            const item = toSearchItemFromAnchor(anchor, baseUrl);
+            if (!item || seen.has(item.url)) return;
+            seen.add(item.url);
+            items.push(item);
+        });
+
+        if (items.length > 0) return items;
+
+        const cardRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?(?:movie-card|poster-card|<p>)[\s\S]*?)<\/a>/gi;
+        let cm;
+        while ((cm = cardRe.exec(html))) {
+            const href = fixUrl(cm[1], baseUrl);
+            const content = cm[2];
+            const titleMatch = /<(?:p|h\d)[^>]*>([\s\S]*?)<\/(?:p|h\d)>/.exec(content);
+            const imgMatch = /<img[^>]+(?:src|data-src)="([^"]+)"/.exec(content);
+            const title = cleanText((titleMatch ? titleMatch[1] : "").replace(/<[^>]+>/g, "")).replace(/^Download\s+/i, "");
+            const poster = imgMatch ? fixUrl(imgMatch[1], baseUrl) : "";
+            if (!href || !title || seen.has(href) || href.includes("javascript")) continue;
+            seen.add(href);
+            items.push(new MultimediaItem({ title, url: href, posterUrl: poster, type: inferType(title) }));
+        }
+
+        return items;
+    }
+
+    async function fetchAioMeta(imdbId, type) {
+        if (!imdbId) return null;
+        try {
+            const metaRes = await http_get(`${MetaUrl}/${type}/${imdbId}.json`, CommonHeaders);
+            return JSON.parse(metaRes?.body || "{}").meta || null;
+        } catch {
+            return null;
+        }
+    }
+
+    async function fetchMany(requests) {
+        const normalized = requests.map(req => ({
+            url: req.url,
+            headers: req.headers || CommonHeaders,
+            meta: req.meta
+        }));
+
+        if (typeof http_parallel === "function") {
+            try {
+                const responses = await http_parallel(normalized.map(req => ({ url: req.url, headers: req.headers })));
+                if (Array.isArray(responses)) {
+                    return responses.map((response, index) => ({ ...(response || {}), meta: normalized[index].meta }));
+                }
+            } catch {}
+        }
+
+        return await Promise.all(normalized.map(async req => {
+            try {
+                const response = await http_get(req.url, req.headers);
+                return { ...(response || {}), meta: req.meta };
+            } catch {
+                return { body: "", meta: req.meta };
+            }
+        }));
+    }
+
+    function makeActor(castMember) {
+        if (!castMember?.name) return null;
+        try {
+            if (typeof Actor !== "undefined") {
+                return new Actor({ name: castMember.name, role: castMember.character, image: castMember.photo });
+            }
+        } catch {}
+        return { name: castMember.name, role: castMember.character, image: castMember.photo };
+    }
+
+    function buildMetaData(meta, fallback) {
+        const cast = (meta?.app_extras?.cast || []).map(makeActor).filter(Boolean);
+        const syncData = {};
+        if (meta?.imdb_id || fallback.imdbId) syncData.imdb = meta?.imdb_id || fallback.imdbId;
+        if (meta?.moviedb_id) syncData.tmdb = String(meta.moviedb_id);
+        return {
+            title: meta?.name || fallback.title,
+            posterUrl: meta?.poster || fallback.poster,
+            bannerUrl: meta?.background || fallback.poster,
+            description: meta?.description || "",
+            tags: meta?.genre || undefined,
+            score: parseFloat(meta?.imdbRating) || undefined,
+            year: parseInt(meta?.year, 10) || undefined,
+            logoUrl: meta?.logo || undefined,
+            cast: cast.length ? cast : undefined,
+            syncData
+        };
+    }
+
+    function episodeMeta(meta, season, episode) {
+        return (meta?.videos || []).find(v => Number(v?.season) === Number(season) && Number(v?.episode) === Number(episode)) || null;
+    }
+
+    function previousElementText(node) {
+        const parent = node?.parent;
+        if (!parent) return "";
+        const index = parent.children.indexOf(node);
+        for (let i = index - 1; i >= 0; i--) {
+            if (parent.children[i]?.tag) return parent.children[i].text();
+        }
+        return "";
+    }
+
+    function findSeason(value) {
+        return parseInt(String(value || "").match(/(?:Season|S)\s*(\d+)/i)?.[1] || "1", 10) || 1;
+    }
+
+    function findEpisode(value, fallback) {
+        return parseInt(String(value || "").match(/(?:Ep|Episode)\s*0*(\d+)/i)?.[1] || "", 10) || fallback;
+    }
+
+    function parseSources(dataStr) {
+        try {
+            const parsed = JSON.parse(dataStr);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {}
+
+        const text = String(dataStr || "");
+        const out = [];
+        const objectRe = /\{([^{}]+)\}/g;
+        let match;
+        while ((match = objectRe.exec(text))) {
+            const body = match[1];
+            const source = body.match(/source\s*:\s*([^,\]}]+)/i)?.[1]?.trim();
+            const quality = body.match(/quality\s*:\s*([^,\]}]+)/i)?.[1]?.trim();
+            if (source) out.push({ source, quality });
+        }
+        if (out.length > 0) return out;
+        return /^https?:\/\//i.test(text.trim()) ? [{ source: text.trim(), quality: "Auto" }] : [];
     }
 
     function base64Decode(str) {
@@ -206,67 +431,20 @@
             { title: "Home", url: "/page/" },
             { title: "Prime Video", url: "/category/amzn-prime-video/page/" },
             { title: "Netflix", url: "/category/netflix/page/" },
-            { title: "Hotstar", url: "/category/hotstar/page/" }
+            { title: "Hotstar", url: "/category/hotstar/page/" },
+            { title: "Anime", url: "/category/anime/page/" },
+            { title: "K Drama", url: "/category/k-drama/page/" }
         ];
         
         try {
+            const baseUrl = await getBaseUrl();
+            const pages = await fetchMany(cats.map(cat => ({ url: `${baseUrl}${cat.url}1`, headers: CommonHeaders, meta: cat })));
             const results = {};
-            for (const cat of cats) {
-                const res = await http_get(`${manifest.baseUrl}${cat.url}1`, CommonHeaders);
-                if (res && res.body) {
-                    const doc = JsoupLite.parse(res.body);
-                    const items = [];
-                    // Support both common selector sets
-                    let cards = doc.select("a.movie-card").length > 0 ? doc.select("a.movie-card") : doc.select(".poster-card");
-                    
-                    if (cards.length === 0) {
-                        // Very broad regex fallback
-                        const cardRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?(?:movie-card|poster-card)[\s\S]*?)<\/a>/gi;
-                        let cm;
-                        while ((cm = cardRe.exec(res.body))) {
-                            const href = fixUrl(cm[1]);
-                            const content = cm[2];
-                            const titleMatch = /<(?:p|h\d)[^>]*class="(?:poster-title|entry-title|title)"[^>]*>([\s\S]*?)<\/(?:p|h\d)>/.exec(content) || /<(?:p|h\d)>([\s\S]*?)<\/(?:p|h\d)>/.exec(content);
-                            const imgMatch = /<img[^>]+src="([^"]+)"/.exec(content);
-                            
-                            const title = unescapeHTML((titleMatch ? titleMatch[1] : "").replace(/<[^>]+>/g, "").replace("Download ", "").trim());
-                            const poster = imgMatch ? fixUrl(imgMatch[1]) : "";
-                            
-                            if (href && title && !href.includes("javascript")) {
-                                items.push(new MultimediaItem({
-                                    title,
-                                    url: href,
-                                    posterUrl: poster,
-                                    type: title.toLowerCase().includes("episode") ? "tvseries" : "movie"
-                                }));
-                            }
-                        }
-                    } else {
-                        cards.forEach(card => {
-                            // If card is the div, find parent a. If card is the a, it is the link.
-                            const link = (card.tag === "a" ? card : card.parent && card.parent.tag === "a" ? card.parent : card.select("a")[0]);
-                            if (!link) return;
-                            
-                            const href = fixUrl(link.attr("href"));
-                            const img = card.find("img");
-                            const titleEl = card.find(".poster-title") || card.find("p") || card.find("h2") || card.find("h3");
-                            
-                            const title = unescapeHTML((titleEl ? titleEl.text() : "").replace("Download ", "").trim());
-                            const poster = img ? fixUrl(img.attr("src")) : "";
-                            
-                            if (href && title && !href.includes("javascript")) {
-                                items.push(new MultimediaItem({
-                                    title,
-                                    url: href,
-                                    posterUrl: poster,
-                                    type: title.toLowerCase().includes("episode") ? "tvseries" : "movie"
-                                }));
-                            }
-                        });
-                    }
-                    if (items.length > 0) results[cat.title] = items;
-                }
-            }
+            pages.forEach(page => {
+                const title = page.meta.title;
+                const items = page.body ? parseCards(page.body, baseUrl) : [];
+                if (items.length > 0) results[title] = items;
+            });
             cb({ success: true, data: results });
         } catch (e) {
             cb({ success: false, errorCode: "SITE_OFFLINE", message: e.message });
@@ -275,24 +453,24 @@
 
     async function search(query, cb) {
         try {
-            // Use the site's JSON search API
-            const res = await http_get(`${manifest.baseUrl}/search.php?q=${encodeURIComponent(query)}&page=1`, CommonHeaders);
+            const baseUrl = await getBaseUrl();
+            const res = await http_get(`${baseUrl}/search.php?q=${encodeURIComponent(query)}&page=1`, CommonHeaders);
             if (res && res.body) {
                 const data = JSON.parse(res.body);
                 const items = [];
                 if (data.hits && Array.isArray(data.hits)) {
                     data.hits.forEach(hit => {
                         const d = hit.document;
-                        const title = unescapeHTML((d.post_title || "").replace("Download ", "").trim());
-                        const href = fixUrl(d.permalink);
-                        const poster = fixUrl(d.post_thumbnail);
+                        const title = cleanText(d.post_title).replace(/^Download\s+/i, "");
+                        const href = fixUrl(d.permalink, baseUrl);
+                        const poster = fixUrl(d.post_thumbnail, baseUrl);
                         
                         if (href && title) {
                             items.push(new MultimediaItem({
                                 title,
                                 url: href,
                                 posterUrl: poster,
-                                type: (title.toLowerCase().includes("episode") || title.toLowerCase().includes("season")) ? "tvseries" : "movie"
+                                type: inferType(title)
                             }));
                         }
                     });
@@ -307,77 +485,89 @@
 
     async function load(url, cb) {
         try {
+            const baseUrl = await getBaseUrl();
             const res = await http_get(url, CommonHeaders);
             if (!res || !res.body) return cb({ success: false, errorCode: "SITE_OFFLINE", message: "Failed to load page" });
             
             const doc = JsoupLite.parse(res.body);
-            let title = (doc.find("title")?.text() || "").replace(" - MoviesDrive", "").replace("Download ", "").trim();
-            let poster = fixUrl(doc.find("img")?.attr("src"));
+            let title = cleanText(doc.find("title")?.text()).replace(/\s*[-|]\s*MoviesDrive.*$/i, "").replace(/^Download\s+/i, "");
+            let poster = fixUrl(doc.find("main > p > img")?.attr("src") || doc.find("img")?.attr("src"), baseUrl);
             const imdbMatch = res.body.match(/imdb\.com\/title\/(tt\d+)/);
             const imdbId = imdbMatch ? imdbMatch[1] : "";
-            const isSeries = title.toLowerCase().includes("episode") || /season\s*\d+/i.test(title);
-            
-            let desc = "";
-            if (imdbId) {
-                const metaRes = await http_get(`${MetaUrl}/${isSeries ? "series" : "movie"}/${imdbId}.json`, CommonHeaders);
-                if (metaRes && metaRes.body) {
-                    try {
-                        const m = JSON.parse(metaRes.body).meta;
-                        desc = m.description || "";
-                        poster = m.poster || poster;
-                    } catch {}
-                }
-            }
+            const isSeries = /episode|season\s*\d+|series/i.test(title);
+            const meta = await fetchAioMeta(imdbId, isSeries ? "series" : "movie");
+            const metaData = buildMetaData(meta, { title, poster, imdbId });
+
+            const buttons = doc.select("h5 > a").filter(a => a !== null && !/zip/i.test(a.text()));
+            const buttonRequests = buttons.map(btn => {
+                const btnText = btn.text();
+                const headingText = previousElementText(btn.parent) || btnText;
+                const btnHref = fixUrl(btn.attr("href"), baseUrl);
+                const qual = getQuality(btnText);
+                return { url: btnHref, headers: CommonHeaders, meta: { btnText, headingText, qual } };
+            });
+            const buttonPages = (await fetchMany(buttonRequests)).map(page => ({
+                ...page.meta,
+                body: page.body || ""
+            }));
+
+            const episodeMap = new Map();
+            const movieLinks = [];
+
+            buttonPages.forEach(page => {
+                if (!page.body) return;
+                const sDoc = JsoupLite.parse(page.body);
+                const anchors = sDoc.select("a").filter(l => {
+                    const href = fixUrl(l.attr("href"), baseUrl);
+                    const lText = l.text();
+                    return /hubcloud|gdflix|gdlink/i.test(`${href} ${lText}`);
+                });
+
+                let fallbackEpisode = 1;
+                anchors.forEach(l => {
+                    const href = fixUrl(l.attr("href"), baseUrl);
+                    const lText = l.text();
+                    const source = { source: href, quality: page.qual };
+                    if (!isSeries) {
+                        movieLinks.push(source);
+                        return;
+                    }
+
+                    const idx = page.body.indexOf(l.outerHTML());
+                    const context = idx >= 0 ? page.body.substring(Math.max(0, idx - 700), idx + l.outerHTML().length) : `${page.headingText} ${page.btnText} ${lText}`;
+                    const season = findSeason(`${page.headingText} ${page.btnText}`);
+                    const episode = findEpisode(`${lText} ${context}`, fallbackEpisode);
+                    fallbackEpisode = Math.max(fallbackEpisode + 1, episode + 1);
+                    const key = `${season}:${episode}`;
+                    const list = episodeMap.get(key) || [];
+                    if (!list.some(item => item.source === href)) list.push(source);
+                    episodeMap.set(key, list);
+                });
+            });
 
             const episodes = [];
-            const buttons = doc.select("h5").map(h5 => h5.find("a")).filter(a => a !== null);
-            
-            for (const btn of buttons) {
-                const btnText = btn.text();
-                const btnHref = fixUrl(btn.attr("href"));
-                const qual = getQuality(btnText);
-                
-                const sRes = await http_get(btnHref, CommonHeaders);
-                if (sRes && sRes.body) {
-                    const sDoc = JsoupLite.parse(sRes.body);
-                    const links = sDoc.select("a");
-                    
-                    links.forEach(l => {
-                        const href = fixUrl(l.attr("href"));
-                        const lText = l.text().toLowerCase();
-                        if (href.match(/hubcloud|gdflix|gdlink/i) || lText.includes("hubcloud")) {
-                            if (isSeries) {
-                                const seaMatch = /(?:Season|S)\s*(\d+)/i.exec(btnText);
-                                const sea = seaMatch ? parseInt(seaMatch[1]) : 1;
-                                const eNumMatch = /(?:Ep|Episode)\s*(\d+)/i.exec(lText) || /(?:Ep|Episode)\s*(\d+)/i.exec(sRes.body.substring(Math.max(0, sRes.body.indexOf(l.outerHTML()) - 500), sRes.body.indexOf(l.outerHTML())));
-                                const eNum = eNumMatch ? parseInt(eNumMatch[1]) : (episodes.length + 1);
-                                
-                                let ex = episodes.find(e => e.season === sea && e.episode === eNum);
-                                if (!ex) {
-                                    ex = new Episode({
-                                        name: `Episode ${eNum}`,
-                                        season: sea,
-                                        episode: eNum,
-                                        posterUrl: poster,
-                                        url: "[]"
-                                    });
-                                    episodes.push(ex);
-                                }
-                                let linksArr = JSON.parse(ex.url);
-                                if (!Array.isArray(linksArr)) linksArr = [];
-                                linksArr.push({ source: href, quality: qual });
-                                ex.url = JSON.stringify(linksArr);
-                            } else {
-                                if (episodes.length === 0) {
-                                    episodes.push(new Episode({ name: "Full Movie", season: 1, episode: 1, url: "[]", posterUrl: poster }));
-                                }
-                                let linksArr = JSON.parse(episodes[0].url);
-                                linksArr.push({ source: href, quality: qual });
-                                episodes[0].url = JSON.stringify(linksArr);
-                            }
-                        }
-                    });
-                }
+            if (isSeries) {
+                Array.from(episodeMap.entries()).forEach(([key, links]) => {
+                    const [season, episode] = key.split(":").map(n => parseInt(n, 10));
+                    const epInfo = episodeMeta(meta, season, episode);
+                    episodes.push(new Episode({
+                        name: epInfo?.name || epInfo?.title || `Episode ${episode}`,
+                        season,
+                        episode,
+                        posterUrl: epInfo?.thumbnail || metaData.posterUrl,
+                        description: epInfo?.overview || undefined,
+                        airDate: epInfo?.released || undefined,
+                        url: JSON.stringify(links)
+                    }));
+                });
+            } else if (movieLinks.length > 0) {
+                episodes.push(new Episode({
+                    name: "Full Movie",
+                    season: 1,
+                    episode: 1,
+                    url: JSON.stringify(movieLinks),
+                    posterUrl: metaData.posterUrl
+                }));
             }
 
             if (episodes.length === 0) return cb({ success: false, errorCode: "PARSE_ERROR", message: "No download links found" });
@@ -387,11 +577,9 @@
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title,
+                    ...metaData,
                     url,
-                    posterUrl: poster,
-                    description: desc,
-                    type: isSeries ? "tvseries" : "movie",
+                    type: isSeries ? "series" : "movie",
                     episodes
                 })
             });
@@ -402,32 +590,35 @@
 
     async function loadStreams(dataStr, cb) {
         try {
-            const sources = JSON.parse(dataStr);
+            const sources = parseSources(dataStr);
             if (!Array.isArray(sources)) return cb({ success: true, data: [] });
             
-            const results = [];
-            for (const item of sources) {
+            const nested = await Promise.all(sources.map(async item => {
                 const u = item.source;
                 const q = item.quality || "HD";
                 if (u.includes("hubcloud") || u.includes("gdflix") || u.includes("gdlink")) {
                     const links = await extractHubCloud(u, q);
-                    links.forEach(l => {
+                    return links.map(l => {
                         let sourceName = `${l.name} [${l.quality || q}]`;
                         if (l.info) sourceName += ` - ${l.info}`;
-                        results.push(new StreamResult({
+                        return new StreamResult({
                             url: l.url,
                             source: sourceName,
+                            quality: l.quality || q,
                             headers: CommonHeaders
-                        }));
+                        });
                     });
-                } else {
-                    results.push(new StreamResult({
+                }
+                return [
+                    new StreamResult({
                         url: u,
                         source: q.includes("p") || q === "4K" ? q : `${q} Source`,
+                        quality: q,
                         headers: CommonHeaders
-                    }));
-                }
-            }
+                    })
+                ];
+            }));
+            const results = nested.flat();
             cb({ success: true, data: results });
         } catch (e) {
             cb({ success: false, errorCode: "PARSE_ERROR", message: "Failed to parse streams: " + e.message });

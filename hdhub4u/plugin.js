@@ -59,6 +59,68 @@
         return query ? `${prefix}&${query}` : prefix;
     }
 
+    function normalizeAbsoluteUrl(url) {
+        const value = String(url || "").trim();
+        if (!value) return "";
+        try {
+            return new URL(value, MAIN_URL).href;
+        } catch (_) {
+            return value;
+        }
+    }
+
+    function makeTrailer(url) {
+        const value = normalizeAbsoluteUrl(url);
+        if (!value) return null;
+        try {
+            if (typeof Trailer !== "undefined") return new Trailer({ url: value });
+        } catch (_) {}
+        return { url: value };
+    }
+
+    function extractImdbId(value) {
+        return String(value || "").match(/tt\d+/i)?.[0] || "";
+    }
+
+    function buildSyncData(tmdbId, imdbId) {
+        const syncData = {};
+        if (tmdbId) syncData.tmdb = String(tmdbId);
+        if (imdbId) syncData.imdb = imdbId;
+        return syncData;
+    }
+
+    function parseRecommendationCard(el) {
+        const a = el.querySelector("figcaption a") || el.querySelector("figure a") || el.querySelector("a");
+        const figureLink = el.querySelector("figure a") || a;
+        if (!a || !figureLink) return null;
+        const titleText = (a.textContent || "").replace(/\|.*$/, "").trim();
+        const href = normalizeSiteUrl(figureLink.getAttribute("href"));
+        const poster = el.querySelector("figure img")?.getAttribute("src") || el.querySelector("img")?.getAttribute("src");
+        if (!titleText || !href) return null;
+        const isSeries = inferIsSeries(titleText, href, "");
+        return new MultimediaItem({
+            title: titleText,
+            url: href,
+            posterUrl: poster,
+            type: isSeries ? "series" : "movie",
+            contentType: isSeries ? "series" : "movie"
+        });
+    }
+
+    function parseRecommendations(doc, currentUrl) {
+        const seen = new Set([normalizeSiteUrl(currentUrl)]);
+        const cards = Array.from(doc.querySelectorAll(".related-posts li.thumb, .related-post li.thumb, .recent-movies > li.thumb, .widget-recent .thumb, div.thumb, li.thumb"));
+        const out = [];
+        for (const card of cards) {
+            const item = parseRecommendationCard(card);
+            if (!item || seen.has(item.url)) continue;
+            seen.add(item.url);
+            out.push(item);
+            if (out.length >= 12) break;
+        }
+        return out;
+    }
+
     function inferIsSeries(title, url, categories) {
         const combined = `${title || ""} ${categories || ""} ${url || ""}`.toLowerCase();
         return /all-episodes|web[- ]series|tv[- ]series|season\s*\d+|\/season-|\/all-episodes|\/series\//i.test(combined);
@@ -109,6 +171,32 @@
         }
         await Promise.all(Array.from({ length: Math.min(max, list.length) }, run));
         return results;
+    }
+
+    async function fetchMany(requests) {
+        const normalized = requests.map(req => ({
+            url: req.url,
+            headers: req.headers || HEADERS,
+            meta: req.meta
+        }));
+
+        if (typeof http_parallel === "function") {
+            try {
+                const responses = await http_parallel(normalized.map(req => ({ url: req.url, headers: req.headers })));
+                if (Array.isArray(responses)) {
+                    return responses.map((response, index) => ({ ...(response || {}), meta: normalized[index].meta }));
+                }
+            } catch (_) {}
+        }
+
+        return await Promise.all(normalized.map(async req => {
+            try {
+                const response = await http_get(req.url, { headers: req.headers });
+                return { ...(response || {}), meta: req.meta };
+            } catch (_) {
+                return { body: "", meta: req.meta };
+            }
+        }));
     }
 
     async function search(query, cb) {
@@ -167,11 +255,16 @@
                 { name: "Adult", path: "/category/adult/" }
             ];
 
-            const homeEntries = await Promise.all(sections.map(async (section) => {
+            const pages = await fetchMany(sections.map(section => ({
+                url: section.path ? `${MAIN_URL}${section.path}` : MAIN_URL,
+                headers: HEADERS,
+                meta: section
+            })));
+
+            const homeEntries = await Promise.all(pages.map(async (page) => {
+                const section = page.meta;
                 try {
-                    const url = section.path ? `${MAIN_URL}${section.path}` : MAIN_URL;
-                    const res = await http_get(url, { headers: HEADERS });
-                    const doc = await parseHtml(res.body);
+                    const doc = await parseHtml(page.body || "");
 
                     const items = Array.from(doc.querySelectorAll('.recent-movies > li.thumb')).map(el => {
                         const a = el.querySelector('figcaption a');
@@ -227,6 +320,7 @@
             genres: data.genres ? data.genres.map(g => g.name) : [],
             rating: data.vote_average,
             imdbId: data.external_ids?.imdb_id,
+            logoUrl: data.external_ids?.imdb_id ? `https://live.metahub.space/logo/medium/${data.external_ids.imdb_id}/img` : null,
             cast: actors
         };
     }
@@ -239,7 +333,9 @@
                 acc[ep.episode_number] = {
                     name: ep.name,
                     description: ep.overview,
-                    posterUrl: ep.still_path ? `${TMDB_IMAGE_BASE}/w500${ep.still_path}` : null
+                    posterUrl: ep.still_path ? `${TMDB_IMAGE_BASE}/w500${ep.still_path}` : null,
+                    airDate: ep.air_date || null,
+                    rating: Number.isFinite(Number(ep.vote_average)) && Number(ep.vote_average) > 0 ? Number(ep.vote_average) : null
                 };
                 return acc;
             }, {});
@@ -323,12 +419,16 @@
             let tmdbSeasonEpisodes = {};
             const imdbLink = doc.querySelector('a[href*="imdb.com"]')?.getAttribute('href');
             const tmdbLink = doc.querySelector('a[href*="themoviedb.org"]')?.getAttribute('href');
+            const trailer = doc.querySelector('.responsive-embed-container > iframe:nth-child(1)')?.getAttribute('src')
+                ?.replace("/embed/", "/watch?v=");
+            const trailers = [makeTrailer(trailer)].filter(Boolean);
+            const recommendations = parseRecommendations(doc, url);
             
             let tmdbId = null;
+            let imdbId = extractImdbId(imdbLink);
             if (tmdbLink) {
                 tmdbId = tmdbLink.split('/')[4]?.split('-')[0];
             } else if (imdbLink) {
-                const imdbId = imdbLink.split('/title/')[1]?.split('/')[0];
                 if (imdbId) {
                     const findUrl = tmdbApi(`find/${imdbId}`, "external_source=imdb_id");
                     const findData = await fetchJson(findUrl, { "Accept": "application/json" }, {});
@@ -350,6 +450,7 @@
                     }
                 }
             }
+            imdbId = tmdbData?.imdbId || imdbId;
 
             let finalTitle = tmdbData?.title || rawTitle.replace(/\|.*$/, "").trim();
             if (!isMovie && seasonNumber && !finalTitle.toLowerCase().includes(`season ${seasonNumber}`)) {
@@ -366,6 +467,10 @@
                 score: tmdbData?.rating,
                 tags: tmdbData?.genres,
                 cast: tmdbData?.cast,
+                logoUrl: tmdbData?.logoUrl || undefined,
+                trailers: trailers.length ? trailers : undefined,
+                recommendations: recommendations.length ? recommendations : undefined,
+                syncData: buildSyncData(tmdbId, imdbId),
                 type: isMovie ? "movie" : "series",
                 contentType: isMovie ? "movie" : "series"
             });
@@ -384,7 +489,8 @@
                         name: "Play",
                         url: JSON.stringify(links.map(l => ({ url: l.href, name: l.text }))),
                         season: 1,
-                        episode: 1
+                        episode: 1,
+                        posterUrl: tmdbData?.poster || poster
                     })
                 ];
             } else {
@@ -472,6 +578,8 @@
                         name: epInfo?.name || `Episode ${epNum}`,
                         description: epInfo?.description,
                         posterUrl: epInfo?.posterUrl,
+                        airDate: epInfo?.airDate,
+                        rating: epInfo?.rating,
                         url: JSON.stringify(epLinks),
                         season: seasonNumber,
                         episode: parseInt(epNum)

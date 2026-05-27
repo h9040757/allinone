@@ -35,27 +35,60 @@
         }
         matches(selector) {
             if (!this.tag) return false;
-            if (selector.includes(".")) {
-                const parts = selector.split(".");
-                const t = parts[0];
-                const c = parts[1];
-                const tagMatch = !t || this.tag === t.toLowerCase();
-                const classMatch = (this.attrs.class || "").split(/\s+/).includes(c);
-                return tagMatch && classMatch;
+            selector = String(selector || "").trim();
+            if (!selector) return false;
+
+            const attrMatch = selector.match(/^([a-z0-9-]*)\[([a-z0-9-]+)(?:=(["']?)([^"'\]]+)\3)?\]$/i);
+            if (attrMatch) {
+                const [, tagName, attrName, , attrValue] = attrMatch;
+                if (tagName && this.tag !== tagName.toLowerCase()) return false;
+                const actual = this.attr(attrName.toLowerCase());
+                return attrValue === undefined ? actual !== "" : actual === attrValue;
             }
+
+            const idMatch = selector.match(/^([a-z0-9-]*)#([a-z0-9_-]+)$/i);
+            if (idMatch) {
+                const [, tagName, id] = idMatch;
+                return (!tagName || this.tag === tagName.toLowerCase()) && this.attrs.id === id;
+            }
+
             if (selector.startsWith("#")) return this.attrs.id === selector.slice(1);
+
+            const parts = selector.split(".");
+            const tagName = parts[0];
+            const classes = parts.slice(1).filter(Boolean);
+            if (classes.length > 0) {
+                const tagMatch = !tagName || this.tag === tagName.toLowerCase();
+                const nodeClasses = (this.attrs.class || "").split(/\s+/);
+                return tagMatch && classes.every(c => nodeClasses.includes(c));
+            }
+
             return this.tag === selector.toLowerCase();
         }
-        selectFirst(selector) {
+        collect(selector, out) {
             for (const c of this.children) {
-                if (c.matches(selector)) return c;
-                const r = c.selectFirst(selector);
-                if (r) return r;
+                if (c.matches(selector)) out.push(c);
+                c.collect(selector, out);
             }
-            return null;
+        }
+        selectFirst(selector) {
+            const matches = this.select(selector);
+            return matches[0] || null;
         }
         find(selector) { return this.selectFirst(selector); }
         select(selector, out = []) {
+            selector = String(selector || "").trim();
+            if (!selector) return out;
+            if (selector.includes(" ")) {
+                let current = [this];
+                selector.split(/\s+/).forEach(part => {
+                    const next = [];
+                    current.forEach(node => node.collect(part, next));
+                    current = next;
+                });
+                out.push(...current);
+                return out;
+            }
             for (const c of this.children) {
                 if (c.matches(selector)) out.push(c);
                 c.select(selector, out);
@@ -120,6 +153,9 @@
     }
 
     const CommonHeaders = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" };
+    const TMDB_API = "https://api.themoviedb.org/3";
+    const TMDB_API_KEY = "1865f43a0549ca50d341dd9ab8b29f49";
+    const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original";
 
     function unescapeHTML(str) {
         if (!str) return "";
@@ -318,6 +354,157 @@
         return String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true });
     }
 
+    function normalizeTitle(value) {
+        return cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+    }
+
+    async function fetchMany(requests) {
+        const normalized = requests.map(req => ({
+            url: req.url,
+            headers: req.headers || CommonHeaders,
+            meta: req.meta
+        }));
+
+        if (typeof http_parallel === "function") {
+            try {
+                const responses = await http_parallel(normalized.map(req => ({ url: req.url, headers: req.headers })));
+                if (Array.isArray(responses)) {
+                    return responses.map((response, index) => ({ ...(response || {}), meta: normalized[index].meta }));
+                }
+            } catch {}
+        }
+
+        return await Promise.all(normalized.map(async req => {
+            try {
+                const response = await http_get(req.url, req.headers);
+                return { ...(response || {}), meta: req.meta };
+            } catch {
+                return { body: "", meta: req.meta };
+            }
+        }));
+    }
+
+    async function httpJson(url) {
+        const res = await http_get(url, CommonHeaders);
+        if (!res || !res.body) return null;
+        try {
+            return JSON.parse(res.body);
+        } catch {
+            return null;
+        }
+    }
+
+    async function fetchTmdbId(title, isMovie) {
+        const json = await httpJson(`${TMDB_API}/search/multi?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanText(title))}`);
+        const results = Array.isArray(json?.results) ? json.results : [];
+        const targetType = isMovie ? "movie" : "tv";
+        const inputNorm = normalizeTitle(title);
+        let fallback = null;
+
+        for (const item of results) {
+            if (!item || item.media_type !== targetType) continue;
+            const resultTitle = isMovie ? item.title : item.name;
+            const resultNorm = normalizeTitle(resultTitle);
+            if (!resultNorm) continue;
+            if (!fallback) fallback = item.id;
+            if (resultNorm === inputNorm || resultNorm.includes(inputNorm) || inputNorm.includes(resultNorm)) return item.id;
+        }
+
+        return fallback;
+    }
+
+    async function fetchTmdbDetails(tmdbId, isMovie) {
+        if (!tmdbId) return null;
+        const type = isMovie ? "movie" : "tv";
+        return await httpJson(`${TMDB_API}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&append_to_response=credits`);
+    }
+
+    async function fetchTmdbExternalIds(tmdbId, isMovie) {
+        if (!tmdbId) return {};
+        const type = isMovie ? "movie" : "tv";
+        return await httpJson(`${TMDB_API}/${type}/${tmdbId}/external_ids?api_key=${TMDB_API_KEY}`) || {};
+    }
+
+    async function fetchTmdbSeason(tmdbId, season) {
+        if (!tmdbId || !season) return null;
+        return await httpJson(`${TMDB_API}/tv/${tmdbId}/season/${season}?api_key=${TMDB_API_KEY}`);
+    }
+
+    function tmdbImage(path) {
+        return path ? `${TMDB_IMAGE_BASE}${path}` : null;
+    }
+
+    function safeScore(value) {
+        const n = Number(value);
+        return Number.isFinite(n) && n > 0 ? n : undefined;
+    }
+
+    function makeActor(name, role, image) {
+        if (!name) return null;
+        try {
+            if (typeof Actor !== "undefined") return new Actor({ name, role, image });
+        } catch {}
+        return { name, role, image };
+    }
+
+    function parseTmdbCast(tmdbDetails, limit = 20) {
+        const cast = Array.isArray(tmdbDetails?.credits?.cast) ? tmdbDetails.credits.cast : [];
+        return cast.slice(0, limit).map(c => makeActor(
+            cleanText(c?.name || c?.original_name),
+            cleanText(c?.character),
+            tmdbImage(c?.profile_path)
+        )).filter(Boolean);
+    }
+
+    function makeTrailer(url) {
+        if (!url) return null;
+        try {
+            if (typeof Trailer !== "undefined") return new Trailer({ url });
+        } catch {}
+        return { url };
+    }
+
+    function parseRecommendations(doc) {
+        return doc.select("div.card-grid-small a").map(card => {
+            const title = cleanText(card.find("h3")?.textContent() || card.find(".movie-card-title")?.textContent());
+            const href = fixUrl(card.attr("href"));
+            const img = card.find("img");
+            const posterUrl = fixUrl(img?.attr("data-src") || img?.attr("src") || "");
+            if (!title || !href) return null;
+            return new MultimediaItem({
+                title,
+                url: href,
+                posterUrl,
+                type: href.includes("-series-") || href.includes("/series/") ? "series" : "movie"
+            });
+        }).filter(Boolean);
+    }
+
+    function readMeta(doc, key, value) {
+        const meta = doc.select("meta").find(m => m.attr(key) === value);
+        return meta?.attr("content") || "";
+    }
+
+    function buildSyncData(tmdbId, imdbId) {
+        const syncData = {};
+        if (tmdbId) syncData.tmdb = String(tmdbId);
+        if (imdbId) syncData.imdb = imdbId;
+        return Object.keys(syncData).length ? syncData : undefined;
+    }
+
+    function getTmdbEpisodeInfo(seasonJson, episodeNumber) {
+        const episodes = Array.isArray(seasonJson?.episodes) ? seasonJson.episodes : [];
+        const ep = episodes.find(item => Number(item?.episode_number) === Number(episodeNumber));
+        if (!ep) return {};
+        return {
+            name: cleanText(ep.name),
+            description: cleanText(ep.overview),
+            posterUrl: tmdbImage(ep.still_path),
+            airDate: ep.air_date || undefined,
+            rating: safeScore(ep.vote_average)
+        };
+    }
+
     function parseRes(html) {
         const doc = new JsoupLite(html);
         const items = [];
@@ -355,17 +542,21 @@
             ];
             
             const results = {};
-            for (const cat of mainpage) {
-                const url = `${manifest.baseUrl}/${cat.url}`;
-                console.log(`Fetching category: ${cat.title} from ${url}`);
-                const res = await http_get(url, CommonHeaders);
+            const pages = await fetchMany(mainpage.map(cat => ({
+                url: `${manifest.baseUrl}/${cat.url}`,
+                headers: CommonHeaders,
+                meta: cat
+            })));
+            pages.forEach(res => {
+                const cat = res.meta;
+                console.log(`Fetched category: ${cat.title}`);
                 if (res && res.body) {
                     const parsed = parseRes(res.body);
                     if (parsed.length > 0) results[cat.title] = parsed;
                 } else {
-                    console.error(`Failed to fetch ${url}`);
+                    console.error(`Failed to fetch ${cat.title}`);
                 }
-            }
+            });
             cb({ success: true, data: results });
         } catch (e) {
             cb({ success: false, errorCode: "SITE_OFFLINE", message: e.message });
@@ -389,11 +580,33 @@
             if (!res || !res.body) return cb({ success: false, errorCode: "SITE_OFFLINE", message: "Failed to load details" });
             
             const doc = new JsoupLite(res.body);
-            const title = doc.find("h1")?.textContent()?.split("(")[0].trim() || "Unknown";
-            let poster = null;
-            doc.select("meta").forEach(m => { if (m.attr("property") === "og:image") poster = fixUrl(m.attr("content")); });
-            
-            const descriptionEl = doc.find(".movie-description") || doc.select(".content-main p").find(p => p.textContent().length > 50);
+            const title = cleanText(doc.find("h1.page-title")?.textContent() || doc.find("h1")?.textContent()).split("(")[0].trim() || "Unknown";
+            const poster = fixUrl(readMeta(doc, "property", "og:image"));
+            const tags = doc.select("div.mt-2 span.badge").map(el => cleanText(el.textContent())).filter(Boolean);
+            const year = parseInt(cleanText(doc.select("div.mt-2 span").find(el => /^\d{4}$/.test(cleanText(el.textContent())))?.textContent()), 10) || undefined;
+            const trailerUrl = doc.find("#trailer-btn")?.attr("data-trailer-url") || "";
+            const recommendations = parseRecommendations(doc);
+            const isSeries = tags.length > 0
+                ? !tags.some(tag => tag.toLowerCase() === "movies")
+                : (url.includes("-series-") || doc.root.textContent().includes("Download Individual Episodes") || !!doc.find(".episode-download-item"));
+            const isMovie = !isSeries;
+
+            const tmdbId = await fetchTmdbId(title, isMovie).catch(() => null);
+            const tmdbDetails = await fetchTmdbDetails(tmdbId, isMovie).catch(() => null);
+            const externalIds = await fetchTmdbExternalIds(tmdbId, isMovie).catch(() => ({}));
+            const imdbId = externalIds?.imdb_id || "";
+            const logoUrl = imdbId ? `https://live.metahub.space/logo/medium/${imdbId}/img` : undefined;
+            const tmdbTitle = cleanText(tmdbDetails?.title || tmdbDetails?.name);
+            const tmdbDate = tmdbDetails?.release_date || tmdbDetails?.first_air_date || "";
+            const tmdbYear = parseInt(String(tmdbDate).split("-")[0], 10) || undefined;
+            const fixedTitle = tmdbTitle || title;
+            const fixedPoster = tmdbImage(tmdbDetails?.poster_path) || poster;
+            const fixedBackdrop = tmdbImage(tmdbDetails?.backdrop_path) || poster;
+            const cast = parseTmdbCast(tmdbDetails);
+            const trailers = [makeTrailer(trailerUrl)].filter(Boolean);
+            const syncData = buildSyncData(tmdbId, imdbId);
+
+            const descriptionEl = doc.find("div.content-section p.mt-4") || doc.find(".movie-description") || doc.select(".content-main p").find(p => p.textContent().length > 50);
             let description = descriptionEl ? stripHTML(descriptionEl.textContent()) : "";
             
             if (!description || description.length < 10) {
@@ -404,8 +617,22 @@
                     }
                 });
             }
-            
-            const isSeries = url.includes("-series-") || doc.root.textContent().includes("Download Individual Episodes") || !!doc.find(".episode-download-item");
+
+            const fixedDescription = cleanText(tmdbDetails?.overview) || description;
+            const commonData = {
+                title: fixedTitle,
+                url,
+                posterUrl: fixedPoster,
+                bannerUrl: fixedBackdrop,
+                description: fixedDescription,
+                year: tmdbYear || year,
+                score: safeScore(tmdbDetails?.vote_average),
+                logoUrl,
+                cast: cast.length ? cast : undefined,
+                trailers: trailers.length ? trailers : undefined,
+                recommendations: recommendations.length ? recommendations : undefined,
+                syncData
+            };
 
             if (!isSeries) {
                 const movieGroups = [];
@@ -439,17 +666,14 @@
                 cb({
                     success: true,
                     data: new MultimediaItem({
-                        title, 
-                        url, 
-                        posterUrl: poster, 
-                        description, 
+                        ...commonData,
                         type: "movie",
                         episodes: [new Episode({ 
                             name: "Full Movie", 
                             season: 1, 
                             episode: 1, 
                             url: JSON.stringify(movieGroups), 
-                            posterUrl: poster 
+                            posterUrl: fixedPoster 
                         })]
                     })
                 });
@@ -475,6 +699,7 @@
                             season: seasonNum,
                             episode: epNum,
                             name: `Episode ${epNum}`,
+                            posterUrl: fixedPoster,
                             links: []
                         };
 
@@ -502,20 +727,44 @@
                         season: seasonNum,
                         episode: nextEpisode,
                         name,
+                        posterUrl: fixedPoster,
                         links
                     });
                     maxEpisodePerSeason[seasonNum] = nextEpisode;
                 });
 
+                const tmdbSeasonCache = {};
+                if (tmdbId) {
+                    const seasons = Array.from(new Set(Array.from(episodesMap.values()).map(item => item.season).filter(Boolean)));
+                    const seasonPages = await fetchMany(seasons.map(season => ({
+                        url: `${TMDB_API}/tv/${tmdbId}/season/${season}?api_key=${TMDB_API_KEY}`,
+                        headers: CommonHeaders,
+                        meta: season
+                    })));
+                    seasonPages.forEach(page => {
+                        try {
+                            tmdbSeasonCache[page.meta] = JSON.parse(page.body || "null");
+                        } catch {
+                            tmdbSeasonCache[page.meta] = null;
+                        }
+                    });
+                }
+
                 const episodes = Array.from(episodesMap.values())
                     .sort(compareEpisodes)
-                    .map(item => new Episode({
-                        name: item.name,
-                        season: item.season,
-                        episode: item.episode,
-                        url: JSON.stringify([{ name: item.name, links: item.links }]),
-                        posterUrl: poster
-                    }));
+                    .map(item => {
+                        const tmdbEp = getTmdbEpisodeInfo(tmdbSeasonCache[item.season], item.episode);
+                        return new Episode({
+                            name: tmdbEp.name || item.name,
+                            season: item.season,
+                            episode: item.episode,
+                            url: JSON.stringify([{ name: item.name, links: item.links }]),
+                            posterUrl: tmdbEp.posterUrl || item.posterUrl || fixedPoster,
+                            description: tmdbEp.description || undefined,
+                            airDate: tmdbEp.airDate,
+                            rating: tmdbEp.rating
+                        });
+                    });
 
                 if (episodes.length === 0) {
                     doc.select("a").forEach(a => {
@@ -524,13 +773,13 @@
                             episodes.push(new Episode({
                                 name: cleanText(a.textContent()),
                                 url: fixUrl(href),
-                                posterUrl: poster
+                                posterUrl: fixedPoster
                             }));
                         }
                     });
                 }
                 
-                cb({ success: true, data: new MultimediaItem({ title, url, posterUrl: poster, description, type: "series", episodes }) });
+                cb({ success: true, data: new MultimediaItem({ ...commonData, type: "series", episodes }) });
             }
         } catch (e) {
             cb({ success: false, errorCode: "PARSE_ERROR", message: e.message });
@@ -546,18 +795,18 @@
 
             const results = [];
             const seenResults = new Set();
-            for (const link of queue) {
+            const extractedGroups = await Promise.all(queue.map(async link => {
                 const resolvedUrl = await resolveRedirectUrl(link.url);
-                if (!resolvedUrl) continue;
+                if (!resolvedUrl) return [];
+                return await resolveStreamLink(resolvedUrl, link);
+            }));
 
-                const extracted = await resolveStreamLink(resolvedUrl, link);
-                extracted.forEach(result => {
+            extractedGroups.flat().forEach(result => {
                     const key = result.url;
                     if (!key || seenResults.has(key)) return;
                     seenResults.add(key);
                     results.push(result);
-                });
-            }
+            });
 
             results.sort((a, b) => (b.quality || 0) - (a.quality || 0) || String(a.source || "").localeCompare(String(b.source || "")));
             cb({ success: true, data: results });
