@@ -3,7 +3,20 @@
     const TMDB_API_URL = "https://api.themoviedb.org/3";
     const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
     const runtimeManifest = (typeof manifest !== "undefined" && manifest) ? manifest : {};
-    const MAIN_URL = String(runtimeManifest.baseUrl || "https://hdhub4u.glass").replace(/\/+$/, "");
+    let MAIN_URL = String(runtimeManifest.baseUrl || "https://hdhub4u.glass").replace(/\/+$/, "");
+    let domainResolved = false;
+
+    async function resolveBaseUrl() {
+        if (domainResolved) return;
+        domainResolved = true;
+        try {
+            const res = await http_get("https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json", { headers: { "User-Agent": "Mozilla/5.0" } });
+            const json = JSON.parse(res.body || "{}");
+            if (json.HDHUB4u) {
+                MAIN_URL = String(json.HDHUB4u).replace(/\/+$/, "");
+            }
+        } catch (_) {}
+    }
     
     const HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
@@ -228,6 +241,7 @@
 
     async function search(query, cb) {
         try {
+            await resolveBaseUrl();
             const today = (new Date()).toISOString().split("T")[0];
             const searchUrl = `https://search.pingora.fyi/collections/post/documents/search?q=${encodeURIComponent(query)}&query_by=post_title,category&query_by_weights=4,2&sort_by=sort_by_date:desc&limit=15&highlight_fields=none&use_cache=true&page=1&analytics_tag=${today}`;
 
@@ -282,9 +296,10 @@
         ];
 
         const result = {};
+        const base = MAIN_URL;
         for (const section of sections) {
             try {
-                const url = section.path ? `${MAIN_URL}${section.path}` : MAIN_URL;
+                const url = section.path ? `${base}${section.path}page/1/` : `${base}/page/1/`;
                 const res = await http_get(url, { headers: HEADERS });
                 const doc = await parseHtml(res.body);
                 const items = Array.from(doc.querySelectorAll('.recent-movies > li.thumb')).map(el => {
@@ -292,7 +307,7 @@
                     if (!a) return null;
                     const titleText = a.textContent.trim();
                     let href = el.querySelector('figure a')?.getAttribute('href');
-                    if (href && href.startsWith("/")) href = `${MAIN_URL}${href}`;
+                    if (href && href.startsWith("/")) href = `${base}${href}`;
                     href = normalizeSiteUrl(href);
                     const poster = el.querySelector('figure img')?.getAttribute('src');
                     const isSeries = inferIsSeries(titleText, href, "");
@@ -336,6 +351,14 @@
 
     async function getHome(cb) {
         try {
+            await resolveBaseUrl();
+            const scraped = await getHomeFromSite();
+            if (scraped && scraped["Latest"] && scraped["Latest"].length > 0) {
+                const trendingRaw = scraped["Latest"].slice(0, 8);
+                scraped["Trending"] = await Promise.all(trendingRaw.map(item => enrichItemWithTMDB(item)));
+                return cb({ success: true, data: scraped });
+            }
+
             const today = (new Date()).toISOString().split("T")[0];
             const searchUrl = `https://search.pingora.fyi/collections/post/documents/search?q=&query_by=post_title,category&query_by_weights=4,2&sort_by=sort_by_date:desc&limit=50&highlight_fields=none&use_cache=true&page=1&analytics_tag=${today}`;
 
@@ -422,11 +445,7 @@
                 return cb({ success: true, data: sections });
             }
 
-            const scraped = await getHomeFromSite();
-            const allItems = scraped["Latest"] || [];
-            const trendingRaw = allItems.slice(0, 8);
-            scraped["Trending"] = await Promise.all(trendingRaw.map(item => enrichItemWithTMDB(item)));
-            cb({ success: true, data: scraped });
+            cb({ success: true, data: scraped || {} });
         } catch (e) {
             cb({ success: false, error: e.message });
         }
@@ -1260,11 +1279,40 @@
         }
     }
 
+    async function testEndpoints(cb) {
+        const RESULTS = {};
+        const HEADERS2 = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+            "Cookie": "xla=s4t",
+            "Referer": `${MAIN_URL}/`
+        };
+        const tests = [
+            { name: "WP-API", url: "https://new1.hdhub4u.limo/wp-json/wp/v2/posts?per_page=10" },
+            { name: "HTTP", url: "http://new1.hdhub4u.limo/" },
+            { name: "RSS", url: "https://new1.hdhub4u.limo/feed/" },
+            { name: "Sitemap", url: "https://new1.hdhub4u.limo/wp-sitemap.xml" },
+            { name: "MoviePage", url: "https://new1.hdhub4u.limo/hoppers-2026-hindi-webrip-full-movie/" }
+        ];
+        for (const t of tests) {
+            try {
+                const res = await http_get(t.url, { headers: HEADERS2 });
+                RESULTS[t.name] = { status: res.status, bodyLen: res.body?.length };
+                if (res.body) {
+                    RESULTS[t.name].hasContent = res.body.includes("recent-movies") || res.body.includes("post-title") || res.body.includes("hoppers");
+                }
+            } catch (e) {
+                RESULTS[t.name] = { error: e.message };
+            }
+        }
+        cb({ success: true, data: RESULTS });
+    }
+
     const plugin = {
         search: search,
         getHome: getHome,
         load: load,
-        loadStreams: loadStreams
+        loadStreams: loadStreams,
+        testEndpoints: testEndpoints
     };
 
     // Export to globalThis for skystream test
@@ -1272,4 +1320,5 @@
     globalThis.getHome = getHome;
     globalThis.load = load;
     globalThis.loadStreams = loadStreams;
+    globalThis.testEndpoints = testEndpoints;
 })();
