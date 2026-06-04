@@ -199,6 +199,33 @@
         }));
     }
 
+    async function searchOnSite(query) {
+        try {
+            const url = `${MAIN_URL}/?s=${encodeURIComponent(query)}`;
+            const res = await http_get(url, { headers: HEADERS });
+            const doc = await parseHtml(res.body);
+            return Array.from(doc.querySelectorAll('.recent-movies > li.thumb')).map(el => {
+                const a = el.querySelector('figcaption a');
+                if (!a) return null;
+                const titleText = a.textContent.trim();
+                let href = el.querySelector('figure a')?.getAttribute('href');
+                if (href && href.startsWith("/")) href = `${MAIN_URL}${href}`;
+                href = normalizeSiteUrl(href);
+                const poster = el.querySelector('figure img')?.getAttribute('src');
+                const isSeries = inferIsSeries(titleText, href, "");
+                return new MultimediaItem({
+                    title: titleText.replace(/\|.*$/, "").trim(),
+                    url: href,
+                    posterUrl: poster,
+                    type: isSeries ? "series" : "movie",
+                    contentType: isSeries ? "series" : "movie"
+                });
+            }).filter(Boolean);
+        } catch (_) {
+            return [];
+        }
+    }
+
     async function search(query, cb) {
         try {
             const today = (new Date()).toISOString().split("T")[0];
@@ -206,41 +233,105 @@
 
             const data = await fetchJson(searchUrl, HEADERS, {});
 
-            if (!data || !data.hits) {
-                return cb({ success: true, data: [] });
+            if (data && data.hits && data.hits.length > 0) {
+                const results = data.hits.map((hit) => {
+                    const doc = hit.document;
+                    if (!doc) return null;
+                    const title = doc.post_title || "Unknown";
+                    const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
+                    const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
+                    let url = doc.permalink;
+                    if (url && url.startsWith("/")) {
+                        url = `${MAIN_URL}${url}`;
+                    } else if (url && !url.startsWith("http")) {
+                        url = `${MAIN_URL}/${url}`;
+                    }
+                    url = normalizeSiteUrl(url);
+                    
+                    const categories = Array.isArray(doc.category) ? doc.category.join(" ") : (doc.category || "");
+                    const isSeries = inferIsSeries(title, url, categories);
+
+                    return new MultimediaItem({
+                        title: title.replace(/\|.*$/, "").trim(),
+                        url: url,
+                        posterUrl: doc.post_thumbnail,
+                        year: year,
+                        type: isSeries ? "series" : "movie",
+                        contentType: isSeries ? "series" : "movie"
+                    });
+                }).filter(Boolean);
+
+                return cb({ success: true, data: results });
             }
 
-            const results = data.hits.map((hit) => {
-                const doc = hit.document;
-                if (!doc) return null;
-                const title = doc.post_title || "Unknown";
-                const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
-                const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
-                let url = doc.permalink;
-                if (url && url.startsWith("/")) {
-                    url = `${MAIN_URL}${url}`;
-                } else if (url && !url.startsWith("http")) {
-                    url = `${MAIN_URL}/${url}`;
-                }
-                url = normalizeSiteUrl(url);
-                
-                const categories = Array.isArray(doc.category) ? doc.category.join(" ") : (doc.category || "");
-                const isSeries = inferIsSeries(title, url, categories);
-
-                return new MultimediaItem({
-                    title: title.replace(/\|.*$/, "").trim(),
-                    url: url,
-                    posterUrl: doc.post_thumbnail,
-                    year: year,
-                    type: isSeries ? "series" : "movie",
-                    contentType: isSeries ? "series" : "movie"
-                });
-            }).filter(Boolean);
-
-            cb({ success: true, data: results });
+            const scraped = await searchOnSite(query);
+            cb({ success: true, data: scraped });
         } catch (e) {
             cb({ success: false, error: e.message });
         }
+    }
+
+    async function getHomeFromSite() {
+        const sections = [
+            { name: "Latest", path: "" },
+            { name: "Bollywood", path: "/category/bollywood-movies/" },
+            { name: "Hollywood", path: "/category/hollywood-movies/" },
+            { name: "Hindi Dubbed", path: "/category/hindi-dubbed/" },
+            { name: "South Hindi", path: "/category/south-hindi-movies/" },
+            { name: "Web Series", path: "/category/web-series/" }
+        ];
+
+        const result = {};
+        for (const section of sections) {
+            try {
+                const url = section.path ? `${MAIN_URL}${section.path}` : MAIN_URL;
+                const res = await http_get(url, { headers: HEADERS });
+                const doc = await parseHtml(res.body);
+                const items = Array.from(doc.querySelectorAll('.recent-movies > li.thumb')).map(el => {
+                    const a = el.querySelector('figcaption a');
+                    if (!a) return null;
+                    const titleText = a.textContent.trim();
+                    let href = el.querySelector('figure a')?.getAttribute('href');
+                    if (href && href.startsWith("/")) href = `${MAIN_URL}${href}`;
+                    href = normalizeSiteUrl(href);
+                    const poster = el.querySelector('figure img')?.getAttribute('src');
+                    const isSeries = inferIsSeries(titleText, href, "");
+                    return new MultimediaItem({
+                        title: titleText.replace(/\|.*$/, "").trim(),
+                        url: href,
+                        posterUrl: poster,
+                        type: isSeries ? "series" : "movie",
+                        contentType: isSeries ? "series" : "movie"
+                    });
+                }).filter(Boolean);
+                result[section.name] = items;
+            } catch (err) {
+                console.error(`Error scraping section ${section.name}:`, err);
+                result[section.name] = [];
+            }
+        }
+        return result;
+    }
+
+    async function enrichItemWithTMDB(item) {
+        const title = item.title || "";
+        const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
+        const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
+        const cleanT = title.replace(/\(.*?\)|\[.*?\]/g, "").trim();
+        let bannerUrl, logoUrl;
+        try {
+            const tmdbId = await searchTMDBIdByTitle(cleanT, item.type !== "series", year);
+            if (tmdbId) {
+                const details = await getTMDBDetails(tmdbId, item.type === "series" ? "tv" : "movie");
+                if (details) {
+                    bannerUrl = details.backdrop;
+                    logoUrl = details.logoUrl;
+                }
+            }
+        } catch (_) {}
+        if (bannerUrl) item.bannerUrl = bannerUrl;
+        if (logoUrl) item.logoUrl = logoUrl;
+        return item;
     }
 
     async function getHome(cb) {
@@ -250,88 +341,92 @@
 
             const data = await fetchJson(searchUrl, HEADERS, {});
 
-            if (!data || !data.hits) {
-                return cb({ success: true, data: {} });
-            }
+            if (data && data.hits && data.hits.length > 0) {
+                const categoryMap = {
+                    "BollyWood": "Bollywood",
+                    "HollyWood": "Hollywood",
+                    "Hindi Dubbed": "Hindi Dubbed",
+                    "South Hindi Movies": "South Hindi",
+                    "WEB-Series": "Web Series",
+                    "Adult": "Adult"
+                };
 
-            const categoryMap = {
-                "BollyWood": "Bollywood",
-                "HollyWood": "Hollywood",
-                "Hindi Dubbed": "Hindi Dubbed",
-                "South Hindi Movies": "South Hindi",
-                "WEB-Series": "Web Series",
-                "Adult": "Adult"
-            };
+                const sections = { "Latest": [], "Trending": [] };
+                const TRENDING_COUNT = 8;
+                const hits = data.hits;
 
-            const sections = { "Latest": [], "Trending": [] };
-            const TRENDING_COUNT = 8;
-            const hits = data.hits;
-
-            async function enrichWithTMDB(doc) {
-                const title = doc.post_title || "Unknown";
-                let url = doc.permalink;
-                if (url && url.startsWith("/")) url = `${MAIN_URL}${url}`;
-                else if (url && !url.startsWith("http")) url = `${MAIN_URL}/${url}`;
-                url = normalizeSiteUrl(url);
-                const categories = Array.isArray(doc.category) ? doc.category : [doc.category || ""];
-                const isSeries = inferIsSeries(title, url, categories.join(" "));
-                const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
-                const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
-                let bannerUrl, logoUrl;
-                try {
-                    const tmdbId = await searchTMDBIdByTitle(title, !isSeries, year);
-                    if (tmdbId) {
-                        const details = await getTMDBDetails(tmdbId, isSeries ? "tv" : "movie");
-                        if (details) {
-                            bannerUrl = details.backdrop;
-                            logoUrl = details.logoUrl;
+                async function enrichWithTMDB(doc) {
+                    const title = doc.post_title || "Unknown";
+                    let url = doc.permalink;
+                    if (url && url.startsWith("/")) url = `${MAIN_URL}${url}`;
+                    else if (url && !url.startsWith("http")) url = `${MAIN_URL}/${url}`;
+                    url = normalizeSiteUrl(url);
+                    const categories = Array.isArray(doc.category) ? doc.category : [doc.category || ""];
+                    const isSeries = inferIsSeries(title, url, categories.join(" "));
+                    const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
+                    const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
+                    let bannerUrl, logoUrl;
+                    try {
+                        const tmdbId = await searchTMDBIdByTitle(title, !isSeries, year);
+                        if (tmdbId) {
+                            const details = await getTMDBDetails(tmdbId, isSeries ? "tv" : "movie");
+                            if (details) {
+                                bannerUrl = details.backdrop;
+                                logoUrl = details.logoUrl;
+                            }
                         }
-                    }
-                } catch (_) {}
-                return new MultimediaItem({
-                    title: title.replace(/\|.*$/, "").trim(),
-                    url: url,
-                    posterUrl: doc.post_thumbnail,
-                    bannerUrl: bannerUrl,
-                    logoUrl: logoUrl,
-                    type: isSeries ? "series" : "movie",
-                    contentType: isSeries ? "series" : "movie"
-                });
+                    } catch (_) {}
+                    return new MultimediaItem({
+                        title: title.replace(/\|.*$/, "").trim(),
+                        url: url,
+                        posterUrl: doc.post_thumbnail,
+                        bannerUrl: bannerUrl,
+                        logoUrl: logoUrl,
+                        type: isSeries ? "series" : "movie",
+                        contentType: isSeries ? "series" : "movie"
+                    });
+                }
+
+                const trendingItems = await Promise.all(
+                    hits.slice(0, TRENDING_COUNT).map(h => h.document ? enrichWithTMDB(h.document) : Promise.resolve(null))
+                );
+                sections["Trending"] = trendingItems.filter(Boolean);
+
+                for (let i = TRENDING_COUNT; i < hits.length; i++) {
+                    const doc = hits[i].document;
+                    if (!doc) continue;
+                    const title = doc.post_title || "Unknown";
+                    let url = doc.permalink;
+                    if (url && url.startsWith("/")) url = `${MAIN_URL}${url}`;
+                    else if (url && !url.startsWith("http")) url = `${MAIN_URL}/${url}`;
+                    url = normalizeSiteUrl(url);
+                    const categories = Array.isArray(doc.category) ? doc.category : [doc.category || ""];
+                    const isSeries = inferIsSeries(title, url, categories.join(" "));
+                    const item = new MultimediaItem({
+                        title: title.replace(/\|.*$/, "").trim(),
+                        url: url,
+                        posterUrl: doc.post_thumbnail,
+                        type: isSeries ? "series" : "movie",
+                        contentType: isSeries ? "series" : "movie"
+                    });
+                    sections["Latest"].push(item);
+                    categories.forEach(cat => {
+                        const sectionName = categoryMap[cat];
+                        if (sectionName) {
+                            if (!sections[sectionName]) sections[sectionName] = [];
+                            sections[sectionName].push(item);
+                        }
+                    });
+                }
+
+                return cb({ success: true, data: sections });
             }
 
-            const trendingItems = await Promise.all(
-                hits.slice(0, TRENDING_COUNT).map(h => h.document ? enrichWithTMDB(h.document) : Promise.resolve(null))
-            );
-            sections["Trending"] = trendingItems.filter(Boolean);
-
-            for (let i = TRENDING_COUNT; i < hits.length; i++) {
-                const doc = hits[i].document;
-                if (!doc) continue;
-                const title = doc.post_title || "Unknown";
-                let url = doc.permalink;
-                if (url && url.startsWith("/")) url = `${MAIN_URL}${url}`;
-                else if (url && !url.startsWith("http")) url = `${MAIN_URL}/${url}`;
-                url = normalizeSiteUrl(url);
-                const categories = Array.isArray(doc.category) ? doc.category : [doc.category || ""];
-                const isSeries = inferIsSeries(title, url, categories.join(" "));
-                const item = new MultimediaItem({
-                    title: title.replace(/\|.*$/, "").trim(),
-                    url: url,
-                    posterUrl: doc.post_thumbnail,
-                    type: isSeries ? "series" : "movie",
-                    contentType: isSeries ? "series" : "movie"
-                });
-                sections["Latest"].push(item);
-                categories.forEach(cat => {
-                    const sectionName = categoryMap[cat];
-                    if (sectionName) {
-                        if (!sections[sectionName]) sections[sectionName] = [];
-                        sections[sectionName].push(item);
-                    }
-                });
-            }
-
-            cb({ success: true, data: sections });
+            const scraped = await getHomeFromSite();
+            const allItems = scraped["Latest"] || [];
+            const trendingRaw = allItems.slice(0, 8);
+            scraped["Trending"] = await Promise.all(trendingRaw.map(item => enrichItemWithTMDB(item)));
+            cb({ success: true, data: scraped });
         } catch (e) {
             cb({ success: false, error: e.message });
         }
