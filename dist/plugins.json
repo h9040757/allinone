@@ -100,7 +100,7 @@
   {
     "packageName": "dev.akash.stars.4khd",
     "name": "4K HD",
-    "version": 8,
+    "version": 9,
     "baseUrl": "https://4khdhub.link",
     "description": "4K Movies and TV Shows (VOD)",
     "authors": [
@@ -118,7 +118,7 @@
   {
     "packageName": "dev.akash.stars.hdhub4u",
     "name": "HDHub4U",
-    "version": 9,
+    "version": 10,
     "baseUrl": "https://new1.hdhub4u.limo",
     "description": "Bollywood, Hollywood and Hindi Dubbed Movies & Web Series",
     "authors": [
