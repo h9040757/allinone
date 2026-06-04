@@ -549,14 +549,39 @@
             })));
             pages.forEach(res => {
                 const cat = res.meta;
-                console.log(`Fetched category: ${cat.title}`);
                 if (res && res.body) {
                     const parsed = parseRes(res.body);
                     if (parsed.length > 0) results[cat.title] = parsed;
-                } else {
-                    console.error(`Failed to fetch ${cat.title}`);
                 }
             });
+
+            const homeItems = results["Home"] || [];
+            const trendingCount = Math.min(8, homeItems.length);
+            const trendingItems = homeItems.slice(0, trendingCount);
+
+            await Promise.all(trendingItems.map(async (item) => {
+                try {
+                    const isMovie = item.type === "movie";
+                    const tmdbId = await fetchTmdbId(item.title, isMovie);
+                    if (tmdbId) {
+                        const [details, externalIds] = await Promise.all([
+                            fetchTmdbDetails(tmdbId, isMovie),
+                            fetchTmdbExternalIds(tmdbId, isMovie)
+                        ]);
+                        if (details?.backdrop_path) {
+                            item.bannerUrl = tmdbImage(details.backdrop_path);
+                        }
+                        if (externalIds?.imdb_id) {
+                            item.logoUrl = `https://live.metahub.space/logo/medium/${externalIds.imdb_id}/img`;
+                        }
+                    }
+                } catch (_) {}
+            }));
+
+            if (trendingItems.length > 0) {
+                results["Trending"] = trendingItems;
+            }
+
             cb({ success: true, data: results });
         } catch (e) {
             cb({ success: false, errorCode: "SITE_OFFLINE", message: e.message });

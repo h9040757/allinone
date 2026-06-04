@@ -3,7 +3,7 @@
     const TMDB_API_URL = "https://api.themoviedb.org/3";
     const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
     const runtimeManifest = (typeof manifest !== "undefined" && manifest) ? manifest : {};
-    const MAIN_URL = String(runtimeManifest.baseUrl || "https://new7.hdhub4u.fo").replace(/\/+$/, "");
+    const MAIN_URL = String(runtimeManifest.baseUrl || "https://hdhub4u.glass").replace(/\/+$/, "");
     
     const HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
@@ -245,56 +245,93 @@
 
     async function getHome(cb) {
         try {
-            const sections = [
-                { name: "Latest", path: "" },
-                { name: "Bollywood", path: "/category/bollywood-movies/" },
-                { name: "Hollywood", path: "/category/hollywood-movies/" },
-                { name: "Hindi Dubbed", path: "/category/hindi-dubbed/" },
-                { name: "South Hindi", path: "/category/south-hindi-movies/" },
-                { name: "Web Series", path: "/category/category/web-series/" },
-                { name: "Adult", path: "/category/adult/" }
-            ];
+            const today = (new Date()).toISOString().split("T")[0];
+            const searchUrl = `https://search.pingora.fyi/collections/post/documents/search?q=&query_by=post_title,category&query_by_weights=4,2&sort_by=sort_by_date:desc&limit=50&highlight_fields=none&use_cache=true&page=1&analytics_tag=${today}`;
 
-            const pages = await fetchMany(sections.map(section => ({
-                url: section.path ? `${MAIN_URL}${section.path}` : MAIN_URL,
-                headers: HEADERS,
-                meta: section
-            })));
+            const data = await fetchJson(searchUrl, HEADERS, {});
 
-            const homeEntries = await Promise.all(pages.map(async (page) => {
-                const section = page.meta;
+            if (!data || !data.hits) {
+                return cb({ success: true, data: {} });
+            }
+
+            const categoryMap = {
+                "BollyWood": "Bollywood",
+                "HollyWood": "Hollywood",
+                "Hindi Dubbed": "Hindi Dubbed",
+                "South Hindi Movies": "South Hindi",
+                "WEB-Series": "Web Series",
+                "Adult": "Adult"
+            };
+
+            const sections = { "Latest": [], "Trending": [] };
+            const TRENDING_COUNT = 8;
+            const hits = data.hits;
+
+            async function enrichWithTMDB(doc) {
+                const title = doc.post_title || "Unknown";
+                let url = doc.permalink;
+                if (url && url.startsWith("/")) url = `${MAIN_URL}${url}`;
+                else if (url && !url.startsWith("http")) url = `${MAIN_URL}/${url}`;
+                url = normalizeSiteUrl(url);
+                const categories = Array.isArray(doc.category) ? doc.category : [doc.category || ""];
+                const isSeries = inferIsSeries(title, url, categories.join(" "));
+                const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
+                const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
+                let bannerUrl, logoUrl;
                 try {
-                    const doc = await parseHtml(page.body || "");
+                    const tmdbId = await searchTMDBIdByTitle(title, !isSeries, year);
+                    if (tmdbId) {
+                        const details = await getTMDBDetails(tmdbId, isSeries ? "tv" : "movie");
+                        if (details) {
+                            bannerUrl = details.backdrop;
+                            logoUrl = details.logoUrl;
+                        }
+                    }
+                } catch (_) {}
+                return new MultimediaItem({
+                    title: title.replace(/\|.*$/, "").trim(),
+                    url: url,
+                    posterUrl: doc.post_thumbnail,
+                    bannerUrl: bannerUrl,
+                    logoUrl: logoUrl,
+                    type: isSeries ? "series" : "movie",
+                    contentType: isSeries ? "series" : "movie"
+                });
+            }
 
-                    const items = Array.from(doc.querySelectorAll('.recent-movies > li.thumb')).map(el => {
-                        const a = el.querySelector('figcaption a');
-                        if (!a) return null;
-                        const titleText = a.textContent.trim();
-                        let href = el.querySelector('figure a')?.getAttribute('href');
-                        if (href && href.startsWith("/")) href = `${MAIN_URL}${href}`;
-                        href = normalizeSiteUrl(href);
-                        const poster = el.querySelector('figure img')?.getAttribute('src');
-                        const isSeries = inferIsSeries(titleText, href, section.name);
+            const trendingItems = await Promise.all(
+                hits.slice(0, TRENDING_COUNT).map(h => h.document ? enrichWithTMDB(h.document) : Promise.resolve(null))
+            );
+            sections["Trending"] = trendingItems.filter(Boolean);
 
-                        return new MultimediaItem({
-                            title: titleText.replace(/\|.*$/, "").trim(),
-                            url: href,
-                            posterUrl: poster,
-                            type: isSeries ? "series" : "movie",
-                            contentType: isSeries ? "series" : "movie"
-                        });
-                    }).filter(Boolean);
+            for (let i = TRENDING_COUNT; i < hits.length; i++) {
+                const doc = hits[i].document;
+                if (!doc) continue;
+                const title = doc.post_title || "Unknown";
+                let url = doc.permalink;
+                if (url && url.startsWith("/")) url = `${MAIN_URL}${url}`;
+                else if (url && !url.startsWith("http")) url = `${MAIN_URL}/${url}`;
+                url = normalizeSiteUrl(url);
+                const categories = Array.isArray(doc.category) ? doc.category : [doc.category || ""];
+                const isSeries = inferIsSeries(title, url, categories.join(" "));
+                const item = new MultimediaItem({
+                    title: title.replace(/\|.*$/, "").trim(),
+                    url: url,
+                    posterUrl: doc.post_thumbnail,
+                    type: isSeries ? "series" : "movie",
+                    contentType: isSeries ? "series" : "movie"
+                });
+                sections["Latest"].push(item);
+                categories.forEach(cat => {
+                    const sectionName = categoryMap[cat];
+                    if (sectionName) {
+                        if (!sections[sectionName]) sections[sectionName] = [];
+                        sections[sectionName].push(item);
+                    }
+                });
+            }
 
-                    return [section.name, items];
-                } catch (err) {
-                    console.error(`Error loading section ${section.name}:`, err);
-                    return [section.name, []];
-                }
-            }));
-
-            const homeData = Object.fromEntries(homeEntries);
-
-            cb({ success: true, data: homeData });
+            cb({ success: true, data: sections });
         } catch (e) {
             cb({ success: false, error: e.message });
         }
