@@ -295,9 +295,8 @@
             { name: "Web Series", path: "/category/web-series/" }
         ];
 
-        const result = {};
         const base = MAIN_URL;
-        for (const section of sections) {
+        const results = await Promise.all(sections.map(async (section) => {
             try {
                 const url = section.path ? `${base}${section.path}page/1/` : `${base}/page/1/`;
                 const res = await http_get(url, { headers: HEADERS });
@@ -319,11 +318,14 @@
                         contentType: isSeries ? "series" : "movie"
                     });
                 }).filter(Boolean);
-                result[section.name] = items;
+                return { name: section.name, items };
             } catch (err) {
-                console.error(`Error scraping section ${section.name}:`, err);
-                result[section.name] = [];
+                return { name: section.name, items: [] };
             }
+        }));
+        const result = {};
+        for (const { name, items } of results) {
+            result[name] = items;
         }
         return result;
     }
@@ -513,18 +515,20 @@
         clean = clean.replace(/\((?:Season|S)\s*\d+[^)]*\)/gi, " ");
         clean = clean.replace(/\b(?:Season|S)\s*\d+\b/gi, " ");
         clean = clean.replace(/\b(?:EP|Episode)\s*\d+\b/gi, " ");
-        clean = clean.replace(/\b(?:WEB[- ]DL|WEB[- ]RIP|HDRIP|BLURAY|HDTC|HQ[- ]HDTC|DS4K|4K|2160p|1080p|720p|480p|10Bit|HEVC|x264|x265|Dual Audio|Multi Audio|Hindi|English|Tamil|Telugu|Korean|Japanese|Spanish|PrimeVideo|Series|Movie|ALL Episodes|EP-\d+ Added)\b/gi, " ");
+        clean = clean.replace(/\b(?:WEB[- ]DL|WEB[- ]RIP|HDRIP|BLURAY|HDTC|HQ[- ]HDTC|DS4K|4K|2160p|1080p|720p|480p|10Bit|HEVC|x264|x265|HD|Dual Audio|Multi Audio|Hindi|English|Tamil|Telugu|Korean|Japanese|Spanish|PrimeVideo|Series|Movie|ALL)\b/gi, " ");
         if (!isMovie) {
             clean = clean.replace(/\b(?:Added|Episodes?)\b/gi, " ");
         }
         clean = clean.replace(/&/g, " ");
         clean = clean.replace(/[()[\]{}|,:;+/_-]+/g, " ");
-        clean = clean.replace(/\b(?:and|org|dd(?:5\.1|2\.0)?)\b/gi, " ");
+        clean = clean.replace(/\b(?:and|org|all|dd(?:5\.1|2\.0)?)\b/gi, " ");
         return clean.replace(/\s+/g, " ").trim();
     }
 
     async function searchTMDBIdByTitle(title, isMovie, year) {
-        const query = normalizeLookupTitle(title, isMovie);
+        let query = normalizeLookupTitle(title, isMovie);
+        if (!query) return null;
+        if (year) query = query.replace(/\b(?:19|20)\d{2}\b/g, " ").replace(/\s+/g, " ").trim();
         if (!query) return null;
 
         const endpoint = isMovie ? "movie" : "tv";
@@ -540,7 +544,7 @@
 
         const queryLc = query.toLowerCase();
         const scored = results.map(result => {
-            const titleText = cleanTitle(isMovie ? result.title : result.name).toLowerCase();
+            const titleText = (isMovie ? result.title : result.name || "").toLowerCase();
             let score = 0;
             if (titleText === queryLc) score += 100;
             else if (titleText.includes(queryLc) || queryLc.includes(titleText)) score += 60;
@@ -765,22 +769,43 @@
                 return null;
             }
             const doc = response.body;
-            console.log("HDHub4U: getRedirectLinks body len: " + doc.length);
-            console.log("HDHub4U: getRedirectLinks body end sample: " + doc.substring(doc.length - 1000).replace(/\n/g, " "));
 
-            // Search for all potential tokens in the entire body
+            // CloudStream-style: match s('o','{BASE64}') and ck('_wp_http_{digits}','{val}'), concatenate all
+            const csRegex = /s\('o','([A-Za-z0-9+/=]+)'|ck\('_wp_http_\d+','([^']+)'/g;
+            let combined = "";
+            let m;
+            while ((m = csRegex.exec(doc)) !== null) {
+                combined += m[1] || m[2] || "";
+            }
+            if (combined) console.log("HDHub4U: getRedirectLinks CS regex matched, combined len=" + combined.length);
+            if (combined) {
+                try {
+                    const decoded = atob(atob(rot13(atob(combined))));
+                    if (decoded.includes("{") || decoded.includes("[")) {
+                        const json = JSON.parse(decoded);
+                        const encodedUrl = atob(json.o || "").trim();
+                        if (encodedUrl) return encodedUrl;
+                        const data = atob(json.data || "").trim();
+                        const wpHttp = (json.blog_url || "").trim();
+                        if (wpHttp && data) {
+                            const drRes = await http_get(`${wpHttp}?re=${data}`, { headers: HEADERS });
+                            const b = drRes.body.trim();
+                            if (b.startsWith("http")) return b;
+                            const bDoc = await parseHtml(b);
+                            return bDoc.querySelector("body")?.textContent?.trim() || b;
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            // Fallback: search for individual base64 tokens (older method)
             const allBase64 = doc.match(/[A-Za-z0-9+/=]{50,}/g) || [];
-            console.log("HDHub4U: getRedirectLinks found " + allBase64.length + " potential tokens (>50 chars)");
-            
             for (const token of allBase64) {
                 try {
-                    const s1 = atob(token);
-                    const s2 = rot13(s1);
-                    const s3 = atob(s2);
-                    const decoded = atob(s3);
-                    if (decoded && decoded.includes("{")) {
+                    const s1 = atob(atob(rot13(atob(token))));
+                    if (s1.includes("{") || s1.includes("[")) {
                         console.log("HDHub4U: getRedirectLinks found VALID JSON in token len " + token.length);
-                        const json = JSON.parse(decoded);
+                        const json = JSON.parse(s1);
                         const encodedUrl = atob(json.o || "").trim();
                         if (encodedUrl) return encodedUrl;
 
@@ -794,65 +819,18 @@
                             return bDoc.querySelector("body")?.textContent?.trim() || b;
                         }
                     }
-                } catch (e) {}
+                } catch (_) {}
             }
 
             // Fallback for anchors that might be the next step
             const doc2 = await parseHtml(doc);
             const anchors = doc2.querySelectorAll("a");
-            console.log("HDHub4u: getRedirectLinks found " + anchors.length + " total anchors");
             for (const a of anchors) {
                 const href = a.getAttribute("href") || "";
                 if (href.includes("techyboy") || href.includes("gadgetsweb") || href.includes("cryptoinsights")) {
-                    console.log("HDHub4u: getRedirectLinks found relevant anchor: " + href);
                     if (href !== url && !href.includes(url)) return await getRedirectLinks(href);
                 }
             }
-
-            // Final fallback: standard regex or meta redirects
-            console.log("HDHub4U: getRedirectLinks falling back to standard redirects");
-            const nextMatch = doc.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]|URL\s*=\s*['"]([^'"]+)['"]|\?next=([^'"]+)|\?id=([^'"]+)/i);
-            if (nextMatch) {
-                const nextUrl = nextMatch[1] || nextMatch[2] || nextMatch[3] || nextMatch[4];
-                if (nextUrl && nextUrl !== url && !nextUrl.includes(url)) {
-                    // If it's a relative URL or just a query string
-                    let finalNext = nextUrl;
-                    if (nextUrl.startsWith("?")) {
-                        const baseUrl = new URL(url);
-                        finalNext = `${baseUrl.origin}${baseUrl.pathname}${nextUrl}`;
-                    } else if (!nextUrl.startsWith("http")) {
-                        const baseUrl = new URL(url);
-                        if (baseUrl.hostname.includes("cryptoinsights.site")) {
-                             // Hard fix: these links are ALWAYS under /homelander/
-                             finalNext = `${baseUrl.origin}/homelander/${nextUrl.replace(/^\//, "")}`;
-                        } else {
-                            const pathParts = baseUrl.pathname.split("/");
-                            pathParts.pop();
-                            const basePath = pathParts.join("/");
-                            finalNext = `${baseUrl.origin}${basePath}/${nextUrl.replace(/^\//, "")}`;
-                        }
-                    }
-                    console.log("HDHub4U: getRedirectLinks recursing to: " + finalNext);
-                    return await getRedirectLinks(finalNext);
-                }
-            }
-
-            // Fallback for script-based redirects inside the body
-            const scriptMatch = doc.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]|location\.replace\(['"]([^'"]+)['"]\)/i);
-            if (scriptMatch) {
-                const sUrl = scriptMatch[1] || scriptMatch[2];
-                if (sUrl && sUrl !== url && !sUrl.includes(url)) {
-                    let fUrl = sUrl;
-                    if (!sUrl.startsWith("http")) {
-                        const bu = new URL(url);
-                        fUrl = `${bu.origin}/${sUrl.replace(/^\//, "")}`;
-                    }
-                    console.log("HDHub4U: getRedirectLinks script recurse: " + fUrl);
-                    return await getRedirectLinks(fUrl);
-                }
-            }
-            const metaMatch = doc.match(/meta http-equiv="refresh" content=".*url=(.*?)"/i);
-            if (metaMatch && metaMatch[1]) return metaMatch[1];
 
             return null;
         } catch (e) {
@@ -864,7 +842,7 @@
     async function hubCloudExtractor(url, referer) {
         console.log("HDHub4U: hubCloudExtractor for: " + url);
         try {
-            let currentUrl = url.replace("hubcloud.ink", "hubcloud.dad");
+            let currentUrl = url;
             const res = await http_get(currentUrl, { headers: { ...HEADERS, "Referer": referer } });
             let pageData = res.body;
             let finalUrl = currentUrl;
@@ -996,8 +974,13 @@
         try {
             const res = await http_get(url, { headers: { ...HEADERS, "Referer": referer } });
             const doc = await parseHtml(res.body);
-            const anchors = Array.from(doc.querySelectorAll("a")).map(a => a.getAttribute("href")).filter(Boolean);
-            const href = anchors.find(h => /hubcloud|hubcdn|hubdrive|pixeldrain|streamtape|hdstream4u|hubstream/i.test(h));
+            // CloudStream-style: specific button selector
+            let href = doc.querySelector(".btn.btn-primary.btn-user.btn-success1.m-1")?.getAttribute("href");
+            if (!href) {
+                // Fallback: generic anchor search
+                const anchors = Array.from(doc.querySelectorAll("a")).map(a => a.getAttribute("href")).filter(Boolean);
+                href = anchors.find(h => /hubcloud|hubcdn|hubdrive|pixeldrain|streamtape|hdstream4u|hubstream/i.test(h));
+            }
             if (href) {
                 const finalHref = normalizeSiteUrl(href);
                 if (finalHref.includes("hubcloud")) return await hubCloudExtractor(finalHref, url);
@@ -1069,8 +1052,8 @@
                 uniqueLinks.push(item);
             }
 
-            const results = await mapLimit(uniqueLinks, 2, async (item) => {
-                const extracted = await withTimeout(internalLoadExtractor(item.href, url), 10000, []);
+            const results = await mapLimit(uniqueLinks, 5, async (item) => {
+                const extracted = await withTimeout(internalLoadExtractor(item.href, url), 5000, []);
                 return extracted.map(stream => {
                     if (item.quality && (!stream.quality || stream.quality === "Unknown")) {
                         stream.quality = item.quality;
@@ -1231,12 +1214,11 @@
                 }
             }
             
-            const extractedGroups = await mapLimit(uniqueLinks, 2, async (lObj) => {
+            const extractedGroups = await mapLimit(uniqueLinks, 5, async (lObj) => {
                 try {
                     const lUrl = normalizeSiteUrl(lObj.url);
                     const lName = lObj.name || "";
-                    console.log("HDHub4U: Extracting from: " + lUrl + " (name: " + lName + ")");
-                    const streams = await withTimeout(internalLoadExtractor(lUrl), 10000, []);
+                    const streams = await withTimeout(internalLoadExtractor(lUrl), 5000, []);
 
                     streams.forEach(s => {
                         let finalQuality = s.quality && s.quality !== "Unknown" ? s.quality : "";

@@ -14,7 +14,11 @@
     "categories": [
       "Anime"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.anichi.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.anichi.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.animedekho",
@@ -33,7 +37,11 @@
     "categories": [
       "Anime"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.animedekho.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.animedekho.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.animesalt",
@@ -55,7 +63,11 @@
       "Movie",
       "Series"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.animesalt.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.animesalt.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.bollyflix",
@@ -74,7 +86,11 @@
       "TvSeries",
       "Anime"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.bollyflix.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.bollyflix.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.cinevood",
@@ -95,7 +111,11 @@
       "AsianDrama",
       "Anime"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.cinevood.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.cinevood.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.4khd",
@@ -113,7 +133,11 @@
       "Movie",
       "TvSeries"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.4khd.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.4khd.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.hdhub4u",
@@ -132,7 +156,11 @@
       "Movie",
       "TvSeries"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.hdhub4u.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.hdhub4u.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.istreamflare",
@@ -154,7 +182,11 @@
       "Anime"
     ],
     "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/streamflare.png",
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.istreamflare.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.istreamflare.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.moviesdrive",
@@ -183,7 +215,11 @@
       "Movie",
       "TvSeries"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.moviesdrive.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.moviesdrive.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.ringz",
@@ -201,7 +237,11 @@
       "Movie",
       "TvSeries"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.ringz.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.ringz.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.streamflix",
@@ -219,7 +259,11 @@
       "Movie",
       "TvSeries"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.streamflix.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.streamflix.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.xdmovies",
@@ -237,7 +281,11 @@
       "Movie",
       "TvSeries"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.xdmovies.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.xdmovies.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.yflix",
@@ -313,7 +361,11 @@
         "url": "https://watchseries.st"
       }
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.yflix.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.yflix.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   },
   {
     "packageName": "dev.akash.stars.yts",
@@ -330,6 +382,10 @@
     "categories": [
       "Movie"
     ],
+<<<<<<< HEAD
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.yts.sky"
+=======
+    "url": "https://github.com/akashdh11/skystream-plugins.git/dist/dev.akash.stars.yts.sky"
+>>>>>>> fcdb747 (fix: update plugins)
   }
 ]
