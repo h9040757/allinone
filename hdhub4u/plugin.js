@@ -873,18 +873,23 @@
             const $ = await parseHtml(pageData);
             const size = $.querySelector("i#size")?.textContent?.trim() || "";
             const header = $.querySelector("div.card-header")?.textContent?.trim() || "";
-            const qualityStr = header.match(/(\d{3,4})[pP]/)?.[1];
-            const quality = qualityStr ? parseInt(qualityStr) : 1080;
+            const qualityStr = header.match(/(\d{3,4})[pP]/)?.[1] || "";
             const headerDetails = cleanTitle(header);
             const labelExtras = (headerDetails ? `[${headerDetails}]` : "") + (size ? `[${size}]` : "");
 
             const links = [];
-            const elements = Array.from($.querySelectorAll("a.btn, a.btn-lg, a.btn-primary, a.btn-success, a.btn-danger"));
+            const elements = Array.from($.querySelectorAll("a.btn, a.btn-lg, a.btn-primary, a.btn-success, a.btn-danger, button.btn"));
             console.log("HDHub4U: HubCloud found " + elements.length + " buttons");
             for (const element of elements) {
-                const link = element.getAttribute("href");
+                let link = element.getAttribute("href");
                 const text = element.textContent.toLowerCase();
+                if (!link) {
+                    const onclick = element.getAttribute("onclick") || "";
+                    const onclickMatch = onclick.match(/location(?:\s*\.\s*href)?\s*=\s*['"]([^'"]+)['"]|window\.open\s*\(\s*['"]([^'"]+)['"]/i);
+                    if (onclickMatch) link = onclickMatch[1] || onclickMatch[2];
+                }
                 if (!link || /telegram|facebook|twitter|tinyurl|tutorial/i.test(link + " " + text)) {
+                    console.log("HDHub4U: HubCloud skipped button: text=[" + (text || "").substring(0, 40) + "] link=[" + (link || "null").substring(0, 40) + "]");
                     continue;
                 }
 
@@ -895,20 +900,21 @@
                     else if (text.includes("fslv2")) label = "HubCloud [FSLv2]";
                     else if (text.includes("mega server")) label = "HubCloud [Mega]";
                     else if (text.includes("zipdisk")) label = "HubCloud [ZipDisk]";
-                    
+                    console.log("HDHub4U: HubCloud " + label + " -> " + link);
                     links.push(new StreamResult({
                         source: label,
                         name: `${label} ${labelExtras}`,
                         url: link,
-                        quality: qualityStr || "1080p",
+                        quality: qualityStr,
                         size: size
                     }));
                 } else if (text.includes("buzzserver")) {
+                    console.log("HDHub4U: HubCloud BuzzServer -> " + link);
                     links.push(new StreamResult({
                         source: "BuzzServer",
                         name: `BuzzServer ${labelExtras}`,
                         url: link,
-                        quality: qualityStr || "1080p",
+                        quality: qualityStr,
                         size: size
                     }));
                 } else if (text.includes("10gbps")) {
@@ -917,25 +923,28 @@
                         source: "10Gbps",
                         name: `10Gbps ${labelExtras}`,
                         url: link,
-                        quality: qualityStr || "1080p",
+                        quality: qualityStr,
                         size: size
                     }));
                 } else if (link && link.includes("pixeldra")) {
+                    console.log("HDHub4U: HubCloud PixelDrain -> " + link);
                     links.push(new StreamResult({
                         source: "PixelDrain",
                         name: `PixelDrain ${labelExtras}`,
                         url: link.includes("?download") ? link : `https://pixeldrain.com/api/file/${link.split('/').pop()}?download`,
-                        quality: qualityStr || "1080p",
+                        quality: qualityStr,
                         size: size
                     }));
                 } else if (link && link.startsWith("http") && !link.includes("facebook.com") && !link.includes("twitter.com")) {
-                    console.log("HDHub4U: HubCloud nested check: " + link);
+                    console.log("HDHub4U: HubCloud nested check: " + link + " text=" + text.substring(0, 40));
                     const extracted = await internalLoadExtractor(link, finalUrl);
                     links.push(...extracted.map(l => {
                         l.quality = l.quality || qualityStr || "1080p";
                         l.size = l.size || size;
                         return l;
                     }));
+                } else {
+                    console.log("HDHub4U: HubCloud unhandled button: text=[" + (text || "").substring(0, 40) + "] link=[" + (link || "null").substring(0, 40) + "]");
                 }
             }
             return links;
@@ -961,7 +970,9 @@
                     : decoded;
                 const m3u8Link = rawLink.trim();
                 if (/^https?:\/\//i.test(m3u8Link)) {
-                    return [new StreamResult({ source: "HubCdn", url: m3u8Link, quality: "1080p" })];
+                    // Extract quality from url if present (e.g. "480p⚡[860MB]")
+                    const qualityStr = url.match(/[&?]q=(\d{3,4})|(\d{3,4})[pP]/i)?.[1] || "";
+                    return [new StreamResult({ source: "HubCdn", url: m3u8Link, quality: qualityStr || "" })];
                 }
             }
             return [];
@@ -1218,7 +1229,7 @@
                 try {
                     const lUrl = normalizeSiteUrl(lObj.url);
                     const lName = lObj.name || "";
-                    const streams = await withTimeout(internalLoadExtractor(lUrl), 5000, []);
+                    const streams = await withTimeout(internalLoadExtractor(lUrl), 8000, []);
 
                     streams.forEach(s => {
                         let finalQuality = s.quality && s.quality !== "Unknown" ? s.quality : "";
@@ -1250,6 +1261,9 @@
             });
 
             allResults.push(...extractedGroups.flat());
+
+            console.log("HDHub4U: Total streams before dedup: " + allResults.length);
+            allResults.forEach((r, i) => console.log("HDHub4U:   pre-dedup[" + i + "] source=" + r.source + " url=" + (r.url || "").substring(0, 60)));
 
             // Deduplicate final results by URL
             const seen = new Set();
