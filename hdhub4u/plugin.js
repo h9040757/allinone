@@ -328,24 +328,30 @@
         return result;
     }
 
+    async function getTMDBLogoUrl(tmdbId, mediaType) {
+        try {
+            const endpoint = mediaType === "tv" ? "tv" : "movie";
+            const url = tmdbApi(`${endpoint}/${tmdbId}`, "append_to_response=external_ids");
+            const data = await fetchJson(url, { "Accept": "application/json" }, {});
+            const imdbId = data.external_ids?.imdb_id;
+            return imdbId ? `https://live.metahub.space/logo/medium/${imdbId}/img` : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
     async function enrichItemWithTMDB(item) {
         const title = item.title || "";
         const yearMatch = title.match(/\((\d{4})\)|\b(\d{4})\b/);
         const year = yearMatch ? parseInt(yearMatch[1] || yearMatch[2]) : null;
-        const cleanT = title.replace(/\(.*?\)|\[.*?\]/g, "").trim();
-        let bannerUrl, logoUrl;
+        const cleanT = normalizeLookupTitle(title, item.type !== "series");
         try {
-            const tmdbId = await searchTMDBIdByTitle(cleanT, item.type !== "series", year);
+            const tmdbId = await searchTMDBIdByTitle(cleanT || title, item.type !== "series", year);
             if (tmdbId) {
-                const details = await getTMDBDetails(tmdbId, item.type === "series" ? "tv" : "movie");
-                if (details) {
-                    bannerUrl = details.backdrop;
-                    logoUrl = details.logoUrl;
-                }
+                const logoUrl = await getTMDBLogoUrl(tmdbId, item.type === "series" ? "tv" : "movie");
+                if (logoUrl) item.logoUrl = logoUrl;
             }
         } catch (_) {}
-        if (bannerUrl) item.bannerUrl = bannerUrl;
-        if (logoUrl) item.logoUrl = logoUrl;
         return item;
     }
 
@@ -501,7 +507,7 @@
     }
 
     function normalizeLookupTitle(title, isMovie) {
-        let clean = cleanTitle(title || "");
+        let clean = (title || "").replace(/\.[a-zA-Z0-9]{2,4}$/, "");
         clean = clean.replace(/\|.*$/, "");
         clean = clean.replace(/\[[^\]]*]/g, " ");
         clean = clean.replace(/\((?:Season|S)\s*\d+[^)]*\)/gi, " ");
