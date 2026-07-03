@@ -77,27 +77,6 @@
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.bollyflix.sky"
   },
   {
-    "packageName": "dev.akash.stars.cinevood",
-    "name": "Cinevood",
-    "version": 2,
-    "baseUrl": "https://two.1cinevood.watch/",
-    "description": "Multi-source scraper for Cinevood (Includes Cinemeta Metadata)",
-    "authors": [
-      "Akash"
-    ],
-    "languages": [
-      "hi",
-      "en"
-    ],
-    "categories": [
-      "Movie",
-      "TvSeries",
-      "AsianDrama",
-      "Anime"
-    ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.cinevood.sky"
-  },
-  {
     "packageName": "dev.akash.stars.4khd",
     "name": "4K HD",
     "version": 9,
@@ -133,28 +112,6 @@
       "TvSeries"
     ],
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.hdhub4u.sky"
-  },
-  {
-    "packageName": "dev.akash.stars.istreamflare",
-    "name": "IStreamFlare (Beta)",
-    "version": 1,
-    "baseUrl": "https://stream.hippitunes.pro",
-    "description": "IStreamFlare Movies & TV Series",
-    "authors": [
-      "Phisher98",
-      "Akash"
-    ],
-    "languages": [
-      "hi",
-      "en"
-    ],
-    "categories": [
-      "Movies",
-      "TV Series",
-      "Anime"
-    ],
-    "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/streamflare.png",
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.istreamflare.sky"
   },
   {
     "packageName": "dev.akash.stars.moviesdrive",
