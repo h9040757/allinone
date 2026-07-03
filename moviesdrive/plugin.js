@@ -603,7 +603,7 @@
         }
     }
 
-    
+    async function loadStreams(dataStr, cb) {
         try {
             const sources = parseSources(dataStr);
             if (!Array.isArray(sources)) return cb({ success: true, data: [] });
