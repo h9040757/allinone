@@ -79,7 +79,7 @@
   {
     "packageName": "dev.akash.stars.4khd",
     "name": "4K HD",
-    "version": 10,
+    "version": 11,
     "baseUrl": "https://4khdhub.link",
     "description": "4K Movies and TV Shows (VOD)",
     "authors": [
@@ -97,7 +97,7 @@
   {
     "packageName": "dev.akash.stars.hdhub4u",
     "name": "HDHub4U",
-    "version": 15,
+    "version": 16,
     "baseUrl": "https://new2.hdhub4u.limo",
     "description": "Bollywood, Hollywood and Hindi Dubbed Movies & Web Series",
     "authors": [
@@ -116,7 +116,7 @@
   {
     "packageName": "dev.akash.stars.moviesdrive",
     "name": "Movies Drive",
-    "version": 4,
+    "version": 6,
     "baseUrl": "https://new2.moviesdrives.my",
     "domains": [
       {
@@ -177,24 +177,6 @@
       "TvSeries"
     ],
     "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.streamflix.sky"
-  },
-  {
-    "packageName": "dev.akash.stars.xdmovies",
-    "name": "XD Movies",
-    "version": 1,
-    "baseUrl": "https://top.xdmovies.wtf/",
-    "description": "Multi-source scraper for XD Movies",
-    "authors": [
-      "Akash"
-    ],
-    "languages": [
-      "en"
-    ],
-    "categories": [
-      "Movie",
-      "TvSeries"
-    ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.xdmovies.sky"
   },
   {
     "packageName": "dev.akash.stars.yflix",
