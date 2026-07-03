@@ -886,6 +886,11 @@
             if (extracted.length > 0) return extracted.map(item => toStreamResult(item, link));
         }
 
+        if (url.includes("hubdrive")) {
+            const extracted = await extractHubDriveStreams(url, link.source, link.quality);
+            if (extracted.length > 0) return extracted.map(item => toStreamResult(item, link));
+        }
+
         return [toStreamResult({ url, source: link.source, quality: link.quality }, link)];
     }
 
@@ -903,6 +908,72 @@
         return new Promise(resolve => {
             extractHubCloud(url, extracted => resolve(Array.isArray(extracted) ? extracted : []), source, quality);
         });
+    }
+
+    function extractHubDriveStreams(url, source, quality) {
+        return new Promise(resolve => {
+            extractHubDrive(url, extracted => resolve(Array.isArray(extracted) ? extracted : []), source, quality);
+        });
+    }
+
+    async function extractHubDrive(url, callback, sourceName = "HubDrive", qualityHint = 0) {
+        try {
+            const headers = { ...CommonHeaders, "Cookie": "xla=s4t", "Referer": url };
+            const res = await http_get(url, headers);
+            if (!res || !res.body) return callback([]);
+
+            const html = res.body;
+
+            // Strategy 1: Find hubcloud.cx/drive/ links in the page and process them
+            const hcRegex = /https?:\/\/hubcloud\.(?:cx|dad|ink)\/drive\/[a-z0-9]+/gi;
+            const hcMatches = html.match(hcRegex) || [];
+            const uniqueHcUrls = [...new Set(hcMatches.map(u => u.replace(/[^a-zA-Z0-9:/._~-]/g, '')))];
+
+            if (uniqueHcUrls.length > 0) {
+                const allResults = [];
+                for (const hcUrl of uniqueHcUrls) {
+                    const hcExtracted = await extractHubCloudStreams(hcUrl, sourceName, qualityHint);
+                    allResults.push(...hcExtracted);
+                }
+                if (allResults.length > 0) return callback(allResults);
+            }
+
+            // Strategy 2: Try the AJAX direct-download endpoint
+            const downIdMatch = html.match(/name="id"\s+value="(\d+)"/);
+            const downId = downIdMatch ? downIdMatch[1] : (url.match(/\/file\/(\d+)/)?.[1]);
+
+            if (downId) {
+                try {
+                    const base = url.replace(/\/file\/\d+.*$/, '');
+                    const ajaxUrl = `${base}/ajax.php?ajax=direct-download`;
+                    const ajaxRes = await http_get(`${ajaxUrl}&id=${downId}`, {
+                        ...headers,
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": url
+                    });
+                    if (ajaxRes && ajaxRes.body) {
+                        try {
+                            const ajaxJson = JSON.parse(ajaxRes.body);
+                            if (ajaxJson?.direct_download_link) {
+                                return callback([{
+                                    url: ajaxJson.direct_download_link,
+                                    source: sourceWithQuality(sourceName, qualityHint),
+                                    quality: qualityHint || undefined
+                                }]);
+                            }
+                        } catch {}
+                    }
+                } catch {}
+            }
+
+            // Strategy 3: Try to extract buttons from the page
+            const extracted = extractFinalButtons(html, sourceName, qualityHint, url);
+            if (extracted.length > 0) return callback(extracted);
+
+            callback([]);
+        } catch {
+            callback([]);
+        }
     }
 
     function base64Decode(str) {
