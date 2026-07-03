@@ -1077,7 +1077,6 @@
             else if (lowerLabel.includes("mega server")) source = `${sourceName} [Mega]`;
             else if (lowerLabel.includes("zipdisk")) source = `${sourceName} [ZipDisk]`;
             else if (lowerLabel.includes("buzzserver")) source = "BuzzServer";
-            else if (lowerLabel.includes("10gbps")) source = "10Gbps";
             else if (lowerLabel.includes("pixel")) source = "PixelDrain";
             else if (label && !lowerLabel.includes("download file")) source = `${sourceName} ${label}`;
 

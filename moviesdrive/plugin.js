@@ -385,11 +385,19 @@
         return out;
     }
 
+
+
     async function extractHubCloud(url, qual) {
         try {
             const headers = { ...CommonHeaders, "Cookie": "xla=s4t" };
+
             const res = await http_get(url, headers);
-            if (!res || !res.body) return [];
+            if (!res || !res.body) {
+                if (url.includes("gdlink")) {
+                    return [{ url: url, name: "GdLink", quality: qual }];
+                }
+                return [];
+            }
             
             // Check if we're already on a page with download buttons (like gamerxyt)
             if (url.includes("gamerxyt.com") || res.body.includes("Download Link Generated")) {
@@ -404,7 +412,14 @@
                     return extractFinalButtons(res2.body, qual);
                 }
             }
-        } catch {}
+            
+            // gdlink fallback: if no hubcloud pattern matched, passthrough the URL
+            if (url.includes("gdlink")) {
+                return [{ url: url, name: "GdLink", quality: qual }];
+            }
+        } catch {
+            if (url.includes("gdlink")) return [{ url: url, name: "GdLink", quality: qual }];
+        }
         return [];
     }
 
@@ -416,7 +431,7 @@
             const href = fixUrl(link.attr("href"));
             const text = link.text().toLowerCase();
             const isBtn = (link.attr("class") || "").includes("btn");
-            if (isBtn && (text.includes("fsl server") || text.includes("fslv2") || text.includes("download file") || text.includes("s3 server") || text.includes("mega server") || text.includes("10gbps"))) {
+            if (isBtn && (text.includes("fsl server") || text.includes("fslv2") || text.includes("download file") || text.includes("s3 server") || text.includes("mega server"))) {
                 results.push({ url: href, name: "HubCloud", quality: qual, info: link.text().trim() });
             } else if (text.includes("pixeldrain") || text.includes("pixel server")) {
                 const idMatch = /\/u\/([a-zA-Z0-9]+)/.exec(href);
@@ -520,7 +535,7 @@
                 const anchors = sDoc.select("a").filter(l => {
                     const href = fixUrl(l.attr("href"), baseUrl);
                     const lText = l.text();
-                    return /hubcloud|gdflix|gdlink/i.test(`${href} ${lText}`);
+                    return /hubcloud|gdlink/i.test(`${href} ${lText}`);
                 });
 
                 let fallbackEpisode = 1;
@@ -588,7 +603,7 @@
         }
     }
 
-    async function loadStreams(dataStr, cb) {
+    
         try {
             const sources = parseSources(dataStr);
             if (!Array.isArray(sources)) return cb({ success: true, data: [] });
@@ -596,7 +611,7 @@
             const nested = await Promise.all(sources.map(async item => {
                 const u = item.source;
                 const q = item.quality || "HD";
-                if (u.includes("hubcloud") || u.includes("gdflix") || u.includes("gdlink")) {
+                if (u.includes("hubcloud") || u.includes("gdlink")) {
                     const links = await extractHubCloud(u, q);
                     return links.map(l => {
                         let sourceName = `${l.name} [${l.quality || q}]`;

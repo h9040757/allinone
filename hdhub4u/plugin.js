@@ -832,6 +832,42 @@
                 }
             }
 
+            // Fallback: follow JavaScript redirects (new gadgetsweb format uses window.location.href)
+            const redirectUrls = [];
+            const jsRedirectHref = doc.match(/window\.location\.href\s*=\s*['"]?([^'"\s;)]+)['"]?/);
+            if (jsRedirectHref && jsRedirectHref[1].startsWith("http")) {
+                redirectUrls.push(jsRedirectHref[1]);
+            } else {
+                // Try setTimeout-based redirects
+                const timeoutMatch = doc.match(/(?:setTimeout|setInterval)\([^,]*['"]?([^'"\s;)]+\/['"]?)/);
+                if (timeoutMatch && timeoutMatch[1].startsWith("http")) {
+                    redirectUrls.push(timeoutMatch[1]);
+                }
+            }
+            // Try meta refresh redirects
+            const metaMatch = doc.match(/<meta[^>]*?url=['"]?([^'"\s>]+)/i);
+            if (metaMatch && metaMatch[1].startsWith("http")) redirectUrls.push(metaMatch[1]);
+
+            for (const redirectUrl of redirectUrls) {
+                try {
+                    console.log("HDHub4U: getRedirectLinks following JS redirect to: " + redirectUrl.substring(0, 100));
+                    const followRes = await http_get(redirectUrl, { headers: HEADERS });
+                    if (followRes && followRes.body) {
+                        // Look for hubcloud/hubcdn/hubdrive URLs on the destination page
+                        const hubMatch = followRes.body.match(/https?:\/\/(?:hubcloud|hubcdn|hubdrive)[^\s"'<>]+/i);
+                        if (hubMatch) {
+                            console.log("HDHub4U: getRedirectLinks found hubcloud link: " + hubMatch[0].substring(0, 80));
+                            return hubMatch[0];
+                        }
+                        // Recursive: if destination has more JS redirects, follow them
+                        const destRedirect = followRes.body.match(/window\.location\.href\s*=\s*['"]?([^'"\s;)]+)['"]?/);
+                        if (destRedirect && destRedirect[1].startsWith("http")) {
+                            return await getRedirectLinks(destRedirect[1]);
+                        }
+                    }
+                } catch (_) {}
+            }
+
             return null;
         } catch (e) {
             console.error("HDHub4U: getRedirectLinks Error: " + e.message);
@@ -913,15 +949,6 @@
                     links.push(new StreamResult({
                         source: "BuzzServer",
                         name: `BuzzServer ${labelExtras}`,
-                        url: link,
-                        quality: qualityStr,
-                        size: size
-                    }));
-                } else if (text.includes("10gbps")) {
-                    console.log("HDHub4U: HubCloud 10Gbps: " + link);
-                    links.push(new StreamResult({
-                        source: "10Gbps",
-                        name: `10Gbps ${labelExtras}`,
                         url: link,
                         quality: qualityStr,
                         size: size
@@ -1139,6 +1166,88 @@
         }
     }
 
+    async function hdStream4uExtractor(url, referer = MAIN_URL) {
+        try {
+            // Extract file_code from URL like https://hdstream4u.com/file/jvvq9iql1moy
+            const fileCode = url.split("/file/").pop().split("/")[0].split("?")[0];
+            if (!fileCode) {
+                console.log("HDHub4U: HdStream4u could not parse file_code from: " + url);
+                return [new StreamResult({ source: "HdStream4u", url: url })];
+            }
+
+            const embedUrl = `https://morencius.com/embed/${fileCode}`;
+            console.log(`HDHub4U: HdStream4u fetching embed: ${embedUrl}`);
+
+            const response = await http_get(embedUrl, {
+                headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+                    "Referer": url
+                }
+            });
+
+            const html = response.body || "";
+
+            // Find and decode the Dean Edwards packed JavaScript
+            // Format: eval(function(p,a,c,k,e,d){...}('ENCODED',RADIX,COUNT,'DICT'.split('|')))
+            var packedMatch = html.match(/eval\(function\(p,a,c,k,e,d\)[^]*?}\('(.+?)',(\d+),(\d+),'([^']+)'\.split\('\|'\)/);
+            if (packedMatch) {
+                var pEncoded = packedMatch[1];
+                var radix = parseInt(packedMatch[2]);
+                var count = parseInt(packedMatch[3]);
+                var dict = packedMatch[4].split("|");
+
+                // Dean Edwards packer decoder
+                function decodePacked(str, base, cnt, words) {
+                    while (cnt--) {
+                        if (words[cnt]) {
+                            str = str.replace(new RegExp("\\b" + cnt.toString(base) + "\\b", "g"), words[cnt]);
+                        }
+                    }
+                    return str;
+                }
+
+                var decoded = decodePacked(pEncoded, radix, count, dict);
+
+                // Extract relative stream URL (hls4 - morencius internal CDN)
+                var hls4Match = decoded.match(/\/stream\/[^"']+/);
+                if (hls4Match) {
+                    var streamUrl = "https://morencius.com" + hls4Match[0];
+                    console.log("HDHub4U: HdStream4u extracted hls4: " + streamUrl.substring(0, 80) + "...");
+                    return [new StreamResult({
+                        source: "HdStream4u",
+                        url: streamUrl,
+                        headers: {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+                            "Referer": embedUrl
+                        }
+                    })];
+                }
+
+                // Fallback: extract absolute acek-cdn HLS URL (hls2)
+                var hls2Match = decoded.match(/https:\/\/[^"']+acek-cdn[^"']*master\.m3u8[^"']*/);
+                if (hls2Match) {
+                    var acekUrl = hls2Match[0];
+                    console.log("HDHub4U: HdStream4u extracted acek-cdn hls2: " + acekUrl.substring(0, 80) + "...");
+                    return [new StreamResult({
+                        source: "HdStream4u",
+                        url: acekUrl,
+                        headers: {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+                            "Referer": embedUrl
+                        }
+                    })];
+                }
+            }
+
+            // Final fallback: return raw URL (current behavior)
+            console.log("HDHub4U: HdStream4u no video found in embed, returning raw URL");
+            return [new StreamResult({ source: "HdStream4u", url: url })];
+        } catch (e) {
+            console.error(`HDHub4U: HdStream4u extractor error: ${e.message}`);
+            return [new StreamResult({ source: "HdStream4u", url: url })];
+        }
+    }
+
     async function internalLoadExtractor(url, referer = MAIN_URL) {
         try {
             const hostname = new URL(url).hostname;
@@ -1179,7 +1288,7 @@
                 })];
             }
             if (hostname.includes("hdstream4u")) {
-                return [new StreamResult({ source: "HdStream4u", url: url })];
+                return await hdStream4uExtractor(url, referer);
             }
             return [];
         } catch (e) {
