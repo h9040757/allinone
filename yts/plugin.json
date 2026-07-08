@@ -1,8 +1,8 @@
 {
   "packageName": "dev.akash.stars.yts",
   "name": "YTS",
-  "version": 1,
-  "baseUrl": "https://yts.bz",
+  "version": 2,
+  "baseUrl": "https://yts.gg",
   "description": "YTS Provider",
   "authors": [
     "Akash"
