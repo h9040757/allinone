@@ -1,9 +1,9 @@
 {
   "packageName": "me.kartoons.skystream",
   "name": "Kartoons",
-  "version": 1,
+  "version": 2,
   "baseUrl": "https://api.kartoons.me",
-  "description": "Scrapes streams from Kartoons.me using standard Stremio Catalogs",
+  "description": "Native Kartoons.me plugin. Fetches catalogs, metadata, and streams directly from the Kartoons API.",
   "authors": [
     "Custom Builder"
   ],
@@ -11,9 +11,9 @@
     "en"
   ],
   "categories": [
-    "Movie",
-    "Series",
     "Cartoon",
-    "Anime"
+    "Anime",
+    "Movie",
+    "Series"
   ]
 }
