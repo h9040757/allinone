@@ -14,7 +14,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.anichi.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.anichi.sky"
   },
   {
     "packageName": "dev.akash.stars.animedekho",
@@ -33,7 +33,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.animedekho.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.animedekho.sky"
   },
   {
     "packageName": "dev.akash.stars.animesalt",
@@ -55,7 +55,7 @@
       "Movie",
       "Series"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.animesalt.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.animesalt.sky"
   },
   {
     "packageName": "dev.akash.stars.bollyflix",
@@ -74,7 +74,7 @@
       "TvSeries",
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.bollyflix.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.bollyflix.sky"
   },
   {
     "packageName": "dev.akash.stars.4khd",
@@ -92,7 +92,7 @@
       "Movie",
       "TvSeries"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.4khd.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.4khd.sky"
   },
   {
     "packageName": "dev.akash.stars.hdhub4u",
@@ -111,7 +111,7 @@
       "Movie",
       "TvSeries"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.hdhub4u.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.hdhub4u.sky"
   },
   {
     "packageName": "dev.akash.stars.moviesdrive",
@@ -140,7 +140,7 @@
       "Movie",
       "TvSeries"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.moviesdrive.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.moviesdrive.sky"
   },
   {
     "packageName": "dev.akash.stars.ringz",
@@ -158,7 +158,7 @@
       "Movie",
       "TvSeries"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.ringz.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.ringz.sky"
   },
   {
     "packageName": "dev.akash.stars.streamflix",
@@ -176,7 +176,7 @@
       "Movie",
       "TvSeries"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.streamflix.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.streamflix.sky"
   },
   {
     "packageName": "dev.akash.stars.yflix",
@@ -252,7 +252,7 @@
         "url": "https://watchseries.st"
       }
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.yflix.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.yflix.sky"
   },
   {
     "packageName": "dev.akash.stars.yts",
@@ -269,6 +269,6 @@
     "categories": [
       "Movie"
     ],
-    "url": "https://raw.githubusercontent.com/akashdh11/skystream-plugins/main/dist/dev.akash.stars.yts.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.yts.sky"
   }
 ]
