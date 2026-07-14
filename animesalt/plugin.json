@@ -1,19 +1,19 @@
 {
-  "packageName": "me.kartoons.stremio.skystream",
+  "packageName": "me.kartoons.skystream",
   "name": "Kartoons",
   "version": 1,
-  "baseUrl": "https://kartoons.me",
+  "baseUrl": "https://api.kartoons.me",
   "description": "Scrapes streams from Kartoons.me using standard Stremio Catalogs",
   "authors": [
-    "CustomBuilder"
+    "Custom Builder"
   ],
   "languages": [
     "en"
   ],
   "categories": [
-    "Cartoon",
-    "Anime",
     "Movie",
-    "Series"
+    "Series",
+    "Cartoon",
+    "Anime"
   ]
 }
