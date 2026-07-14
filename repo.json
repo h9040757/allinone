@@ -1,7 +1,7 @@
 {
-  "name": "Stars",
+  "name": "all in one",
   "packageName": "dev.akash.stars",
-  "description": "SkyStream plugins repository",
+  "description": "everything here",
   "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/h9040757/allinone/main/dist/plugins.json"
