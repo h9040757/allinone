@@ -39,7 +39,7 @@
     "packageName": "me.kartoons.stremio.skystream",
     "name": "Kartoons",
     "version": 1,
-    "baseUrl": "https://api.kartoons.me",
+    "baseUrl": "https://kartoons.me",
     "description": "Scrapes streams from Kartoons.me using standard Stremio Catalogs",
     "authors": [
       "CustomBuilder"
