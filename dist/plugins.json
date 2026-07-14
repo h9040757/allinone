@@ -36,26 +36,24 @@
     "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.animedekho.sky"
   },
   {
-    "packageName": "dev.akash.stars.animesalt",
-    "name": "Animesalt",
-    "version": 10,
-    "baseUrl": "https://animesalt.ac",
-    "description": "Port of CloudStream Animesalt extension",
+    "packageName": "me.kartoons.stremio.skystream",
+    "name": "Kartoons",
+    "version": 1,
+    "baseUrl": "https://api.kartoons.me",
+    "description": "Scrapes streams from Kartoons.me using standard Stremio Catalogs",
     "authors": [
-      "Akash"
+      "CustomBuilder"
     ],
     "languages": [
-      "hi",
-      "jp",
       "en"
     ],
     "categories": [
-      "Anime",
       "Cartoon",
+      "Anime",
       "Movie",
       "Series"
     ],
-    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.animesalt.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/me.kartoons.stremio.skystream.sky"
   },
   {
     "packageName": "dev.akash.stars.bollyflix",
