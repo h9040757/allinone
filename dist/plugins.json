@@ -36,24 +36,24 @@
     "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/dev.akash.stars.animedekho.sky"
   },
   {
-    "packageName": "me.kartoons.stremio.skystream",
+    "packageName": "me.kartoons.skystream",
     "name": "Kartoons",
     "version": 1,
-    "baseUrl": "https://kartoons.me",
+    "baseUrl": "https://api.kartoons.me",
     "description": "Scrapes streams from Kartoons.me using standard Stremio Catalogs",
     "authors": [
-      "CustomBuilder"
+      "Custom Builder"
     ],
     "languages": [
       "en"
     ],
     "categories": [
-      "Cartoon",
-      "Anime",
       "Movie",
-      "Series"
+      "Series",
+      "Cartoon",
+      "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/me.kartoons.stremio.skystream.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/me.kartoons.skystream.sky"
   },
   {
     "packageName": "dev.akash.stars.bollyflix",
