@@ -4,7 +4,7 @@
     "name": "Kartoons",
     "version": 2,
     "baseUrl": "https://api.kartoons.me",
-    "description": "Native Kartoons.me plugin. Fetches catalogs, metadata, and streams directly from the Kartoons API.",
+    "description": "Cartoon",
     "authors": [
       "Custom Builder"
     ],
