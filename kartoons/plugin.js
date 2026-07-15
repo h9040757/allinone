@@ -1,22 +1,16 @@
 (function () {
-    // Dynamically resolve base URL injected by SkyStream or fall back to default API
-    const BASE_URL = (typeof manifest !== "undefined" && manifest.baseUrl) || "https://api.kartoons.me/api/stremio";
+    // --- Configuration & Constants ---
+    const MANIFEST_URL = "https://api.kartoons.me/api/stremio/manifest.json?token=1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
+    const API_BASE_URL = "https://api.kartoons.me/api/stremio";
     const TOKEN = "1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
+
     const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-    
     const HEADERS = {
         "User-Agent": UA,
         "Accept": "application/json"
     };
 
-    // Default fallback catalogs if dynamic manifest fetching is offline
-    const DEFAULT_CATALOGS = [
-        { type: "series", id: "kartoons_series", name: "Kartoons Series" },
-        { type: "movie", id: "kartoons_movies", name: "Kartoons Movies" }
-    ];
-
-    // --- Utility Parsers ---
-    
+    // --- Utilities & Serialization ---
     function safeParse(data) {
         if (!data) return null;
         if (typeof data === "object") return data;
@@ -27,86 +21,103 @@
         }
     }
 
-    async function getJson(url) {
-        try {
-            const separator = url.indexOf("?") >= 0 ? "&" : "?";
-            const targetUrl = `${url}${separator}token=${TOKEN}`;
-            const res = await http_get(targetUrl, HEADERS);
-            return safeParse(res && res.body ? res.body : null);
-        } catch (e) {
-            console.error("HTTP GET Error on: " + url, e.message || String(e));
-            return null;
+    function payload(id, type, poster) {
+        return JSON.stringify({ id: String(id), type: String(type), poster: poster || "" });
+    }
+
+    function inputPayload(value) {
+        const data = safeParse(value);
+        if (data && data.id) return data;
+        return { id: String(value || ""), type: "series", poster: "" };
+    }
+
+    async function fetchJson(url) {
+        const res = await http_get(url, HEADERS);
+        if (res && res.body) {
+            return safeParse(res.body);
         }
+        throw new Error("Failed to load response from API route: " + url);
     }
 
-    function cleanStreamTitle(title) {
-        if (!title) return "Default Server";
-        return title.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-    }
+    function mapStremioMetaToMedia(meta) {
+        if (!meta || !meta.id) return null;
+        
+        let type = "series";
+        if (meta.type === "movie") type = "movie";
+        else if (meta.type === "anime") type = "anime";
 
-    function detectQuality(title, url) {
-        const textToAnalyze = String(title || "") + " " + String(url || "");
-        const match = textToAnalyze.match(/(\d{3,4})p/i);
-        if (match) return parseInt(match[1], 10);
-        if (/4k|2160/i.test(textToAnalyze)) return 2160;
-        if (/1080/i.test(textToAnalyze)) return 1080;
-        if (/720/i.test(textToAnalyze)) return 720;
-        if (/480/i.test(textToAnalyze)) return 480;
-        return 720;
-    }
-
-    function mapStremioItem(item, fallbackType) {
-        if (!item || !item.id) return null;
-        const type = item.type || fallbackType || "series";
         return new MultimediaItem({
-            title: item.name || "Unknown Title",
-            url: JSON.stringify({ id: item.id, type: type, poster: item.poster || "" }),
-            posterUrl: item.poster || "",
+            title: meta.name || "Untitled Content",
+            url: payload(meta.id, meta.type || "series", meta.poster),
+            posterUrl: meta.poster || "",
+            bannerUrl: meta.background || "",
+            description: meta.description || "",
             type: type,
-            description: item.description || "",
-            year: item.releaseInfo ? parseInt(item.releaseInfo, 10) : undefined
+            year: meta.releaseInfo ? parseInt(meta.releaseInfo, 10) : undefined,
+            genres: meta.genres || []
         });
     }
 
-    // --- Handler Interfaces ---
+    async function mapLimit(items, limit, worker) {
+        const list = items || [];
+        const output = new Array(list.length);
+        let cursor = 0;
+        async function run() {
+            while (cursor < list.length) {
+                const index = cursor++;
+                try {
+                    output[index] = await worker(list[index], index);
+                } catch (e) {
+                    output[index] = null;
+                }
+            }
+        }
+        const workers = [];
+        for (let i = 0; i < Math.min(limit, list.length); i++) workers.push(run());
+        await Promise.all(workers);
+        return output;
+    }
+
+    // --- Core SkyStream Hooks ---
 
     async function getHome(cb) {
         try {
-            let catalogsToLoad = DEFAULT_CATALOGS;
+            // Step 1: Query root Stremio Manifest to dynamically collect catalog specifications
+            const manifest = await fetchJson(MANIFEST_URL);
+            const catalogs = manifest.catalogs || [];
 
-            // Renamed locally to 'stremioManifest' to avoid collisions with SkyStream's global constant 'manifest'
-            const stremioManifest = await getJson(`${BASE_URL}/manifest.json`);
-            if (stremioManifest && Array.isArray(stremioManifest.catalogs)) {
-                catalogsToLoad = stremioManifest.catalogs.map(cat => ({
-                    type: cat.type,
-                    id: cat.id,
-                    name: cat.name || `${cat.type.toUpperCase()} Catalog`
-                })).filter(cat => cat.type && cat.id);
+            if (!catalogs.length) {
+                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found inside manifest definitions." });
             }
 
-            const homeData = {};
-            
-            await Promise.all(catalogsToLoad.map(async (catalog) => {
-                const url = `${BASE_URL}/catalog/${catalog.type}/${catalog.id}.json`;
-                const data = await getJson(url);
-                const items = (data && data.metas ? data.metas : [])
-                    .map(item => mapStremioItem(item, catalog.type))
-                    .filter(Boolean);
-                
-                if (items.length > 0) {
-                    homeData[catalog.name] = items;
+            // Step 2: Iterate and scrape content from every catalog index defined inside manifest schema
+            const homeSections = await mapLimit(catalogs, 4, async (cat) => {
+                const catalogId = cat.id;
+                const type = cat.type;
+                const sectionName = cat.name || `${type} Section`;
+
+                // Build standard Stremio protocol URL syntax pathing
+                const catalogUrl = `${API_BASE_URL}/catalog/${type}/${catalogId}.json?token=${TOKEN}`;
+                try {
+                    const catalogData = await fetchJson(catalogUrl);
+                    const rawMetas = catalogData.metas || [];
+                    const mappedItems = rawMetas.map(mapStremioMetaToMedia).filter(Boolean);
+                    
+                    return { name: sectionName, items: mappedItems };
+                } catch (err) {
+                    console.error("Error reading catalog index: " + catalogId, err);
+                    return null;
                 }
-            }));
+            });
 
-            if (Object.keys(homeData).length === 0) {
-                return cb({ 
-                    success: false, 
-                    errorCode: "HOME_ERROR", 
-                    message: "No catalogs loaded. If this error persists, you may need to utilize a VPN to resolve network-level blocks targeting Kartoons.me." 
-                });
+            const finalHomeData = {};
+            for (const section of homeSections) {
+                if (section && section.items && section.items.length) {
+                    finalHomeData[section.name] = section.items;
+                }
             }
 
-            cb({ success: true, data: homeData });
+            cb({ success: true, data: finalHomeData });
         } catch (e) {
             cb({ success: false, errorCode: "HOME_ERROR", message: e.message || String(e) });
         }
@@ -114,124 +125,128 @@
 
     async function search(query, cb) {
         try {
-            const searchPromises = DEFAULT_CATALOGS.map(async (catalog) => {
-                const encodedQuery = encodeURIComponent(query);
-                const url = `${BASE_URL}/catalog/${catalog.type}/${catalog.id}/search=${encodedQuery}.json`;
-                const data = await getJson(url);
-                return (data && data.metas ? data.metas : [])
-                    .map(item => mapStremioItem(item, catalog.type))
-                    .filter(Boolean);
-            });
-
-            const results = await Promise.all(searchPromises);
-            const flatResults = results.reduce((acc, current) => acc.concat(current), []);
+            const manifest = await fetchJson(MANIFEST_URL);
+            const catalogs = manifest.catalogs || [];
             
-            cb({ success: true, data: flatResults });
+            if (!catalogs.length) {
+                return cb({ success: true, data: [] });
+            }
+
+            // Target search against primary structural collections using strict escape structures
+            const primaryCatalog = catalogs[0];
+            const searchUrl = `${API_BASE_URL}/catalog/${primaryCatalog.type}/${primaryCatalog.id}/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
+            
+            const searchData = await fetchJson(searchUrl);
+            const rawMetas = searchData.metas || [];
+            const items = rawMetas.map(mapStremioMetaToMedia).filter(Boolean);
+
+            cb({ success: true, data: items });
         } catch (e) {
             cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message || String(e) });
         }
     }
 
-    async function load(urlPayload, cb) {
+    async function load(urlStr, cb) {
         try {
-            const input = safeParse(urlPayload);
-            if (!input || !input.id || !input.type) {
-                throw new Error("Invalid item payload");
-            }
+            const metaInput = inputPayload(urlStr);
+            const detailUrl = `${API_BASE_URL}/meta/${metaInput.type}/${metaInput.id}.json?token=${TOKEN}`;
+            
+            const detailData = await fetchJson(detailUrl);
+            const meta = detailData.meta;
+            if (!meta) throw new Error("Meta asset parsing yielded null pointer data object response.");
 
-            const metaUrl = `${BASE_URL}/meta/${input.type}/${input.id}.json`;
-            const response = await getJson(metaUrl);
-            const meta = response && response.meta ? response.meta : null;
+            let itemType = "series";
+            if (meta.type === "movie") itemType = "movie";
+            else if (meta.type === "anime") itemType = "anime";
 
-            if (!meta) {
-                throw new Error("Failed to load metadata. This may indicate a connection restriction or API block.");
-            }
-
-            const title = meta.name || "Unknown";
-            const poster = meta.poster || input.poster || "";
-            const description = meta.description || "";
-            const year = meta.releaseInfo ? parseInt(meta.releaseInfo, 10) : undefined;
-            const genres = Array.isArray(meta.genres) ? meta.genres : [];
-
-            let episodes = [];
-
-            if (input.type === "series") {
-                if (Array.isArray(meta.videos)) {
-                    episodes = meta.videos.map((video) => {
-                        return new Episode({
-                            name: video.title || `Episode ${video.episode}`,
-                            url: JSON.stringify({ episodeId: video.id, type: input.type }),
-                            season: video.season || 1,
-                            episode: video.episode || 1,
-                            description: video.overview || "",
-                            posterUrl: video.thumbnail || poster
-                        });
-                    });
-                }
-            } else {
-                episodes = [
-                    new Episode({
-                        name: title,
-                        url: JSON.stringify({ episodeId: meta.id, type: input.type }),
-                        season: 1,
-                        episode: 1,
-                        posterUrl: poster
-                    })
-                ];
-            }
-
-            cb({
-                success: true,
-                data: new MultimediaItem({
-                    title: title,
-                    url: urlPayload,
-                    posterUrl: poster,
-                    bannerUrl: meta.background || "",
-                    description: description,
-                    type: input.type,
-                    year: year,
-                    genres: genres,
-                    episodes: episodes
-                })
+            const resultItem = new MultimediaItem({
+                title: meta.name || "Untitled",
+                url: payload(meta.id, meta.type, meta.poster),
+                posterUrl: meta.poster || metaInput.poster || "",
+                bannerUrl: meta.background || "",
+                description: meta.description || "",
+                type: itemType,
+                year: meta.releaseInfo ? parseInt(meta.releaseInfo, 10) : undefined,
+                genres: meta.genres || [],
+                episodes: []
             });
+
+            // Map standard layout definitions based on catalog structures
+            if (meta.type === "movie") {
+                resultItem.episodes = [new Episode({
+                    name: meta.name || "Play Video",
+                    url: JSON.stringify({ id: meta.id, type: "movie", videoId: meta.id }),
+                    season: 1,
+                    episode: 1
+                })];
+            } else if (meta.videos && meta.videos.length > 0) {
+                resultItem.episodes = meta.videos.map((vid) => {
+                    return new Episode({
+                        name: vid.title || `Episode ${vid.episode || 1}`,
+                        url: JSON.stringify({ 
+                            id: meta.id, 
+                            type: meta.type, 
+                            videoId: vid.id,
+                            season: vid.season || 1,
+                            episode: vid.episode || 1
+                        }),
+                        season: vid.season || 1,
+                        episode: vid.episode || 1,
+                        description: vid.description || "",
+                        posterUrl: vid.thumbnail || meta.poster || ""
+                    });
+                });
+            } else {
+                // Structural fallback for elements missing concrete sub-item lists
+                resultItem.episodes = [new Episode({
+                    name: meta.name || "Default Episode Stream",
+                    url: JSON.stringify({ id: meta.id, type: meta.type, videoId: meta.id }),
+                    season: 1,
+                    episode: 1
+                })];
+            }
+
+            cb({ success: true, data: resultItem });
         } catch (e) {
             cb({ success: false, errorCode: "LOAD_ERROR", message: e.message || String(e) });
         }
     }
 
-    async function loadStreams(episodePayload, cb) {
+    async function loadStreams(urlInfo, cb) {
         try {
-            const input = safeParse(episodePayload);
-            if (!input || !input.episodeId || !input.type) {
-                throw new Error("Invalid episode payload");
+            const streamInput = safeParse(urlInfo);
+            if (!streamInput || !streamInput.videoId) {
+                throw new Error("Invalid structure provided to stream retrieval loop pipeline block.");
             }
 
-            const streamUrl = `${BASE_URL}/stream/${input.type}/${input.episodeId}.json`;
-            const data = await getJson(streamUrl);
-            const streams = data && Array.isArray(data.streams) ? data.streams : [];
+            const streamFetchUrl = `${API_BASE_URL}/stream/${streamInput.type}/${encodeURIComponent(streamInput.videoId)}.json?token=${TOKEN}`;
+            const streamResponse = await fetchJson(streamFetchUrl);
+            const rawStreams = streamResponse.streams || [];
 
-            const resolvedStreams = streams.map((stream) => {
-                const finalUrl = stream.url || stream.externalUrl;
-                if (!finalUrl) return null;
+            const streamResults = rawStreams.map((st) => {
+                // If it's an absolute URL, output directly, otherwise look for an infoHash
+                let directUrl = st.url;
+                if (!directUrl && st.infoHash) {
+                    directUrl = `magnet:?xt=urn:btih:${st.infoHash}`;
+                }
 
-                const name = cleanStreamTitle(stream.title || stream.name || "Server Link");
-                const quality = detectQuality(name, finalUrl);
+                if (!directUrl) return null;
 
                 return new StreamResult({
-                    url: finalUrl,
-                    source: `Kartoons - ${name}`,
-                    quality: quality,
+                    url: directUrl,
+                    source: st.title || st.name || "Kartoons Engine Stream",
+                    quality: st.title ? (parseInt(st.title.match(/\b(720|1080|2160|480)p\b/)?.[1], 10) || 720) : 720,
                     headers: HEADERS
                 });
             }).filter(Boolean);
 
-            cb({ success: true, data: resolvedStreams });
+            cb({ success: true, data: streamResults });
         } catch (e) {
             cb({ success: false, errorCode: "STREAM_ERROR", message: e.message || String(e) });
         }
     }
 
-    // --- Exposing Global Callbacks ---
+    // Register routines globally to match internal interface layer hooks
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
