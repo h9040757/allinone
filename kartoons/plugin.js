@@ -82,37 +82,61 @@
 
     async function getHome(cb) {
         try {
-            // Step 1: Query root Stremio Manifest to dynamically collect catalog specifications
             const manifest = await fetchJson(MANIFEST_URL);
             const catalogs = manifest.catalogs || [];
 
             if (!catalogs.length) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found inside manifest definitions." });
+                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found." });
             }
 
-            // Step 2: Iterate and scrape content from every catalog index defined inside manifest schema
-            const homeSections = await mapLimit(catalogs, 4, async (cat) => {
+            // Map and filter catalogs into the requested target layout categories
+            const homeSections = await mapLimit(catalogs, 6, async (cat) => {
                 const catalogId = cat.id;
                 const type = cat.type;
-                const sectionName = cat.name || `${type} Section`;
+                let rawName = (cat.name || "").toLowerCase();
 
-                // Build standard Stremio protocol URL syntax pathing
+                // Explicitly ignore any continue watching or personalized user rows
+                if (rawName.includes("continue") || rawName.includes("watching") || rawName.includes("history")) {
+                    return null;
+                }
+
+                // Determine display names matching your homepage specifications
+                let targetDisplayName = cat.name;
+                if (rawName.includes("trending")) {
+                    targetDisplayName = "Trending Now";
+                } else if (type === "movie" && (rawName.includes("popular") || rawName.includes("top"))) {
+                    targetDisplayName = "Popular Movies";
+                } else if ((type === "series" || type === "show") && (rawName.includes("popular") || rawName.includes("top"))) {
+                    targetDisplayName = "Popular Shows";
+                }
+
                 const catalogUrl = `${API_BASE_URL}/catalog/${type}/${catalogId}.json?token=${TOKEN}`;
                 try {
                     const catalogData = await fetchJson(catalogUrl);
                     const rawMetas = catalogData.metas || [];
                     const mappedItems = rawMetas.map(mapStremioMetaToMedia).filter(Boolean);
                     
-                    return { name: sectionName, items: mappedItems };
+                    return { name: targetDisplayName, items: mappedItems };
                 } catch (err) {
-                    console.error("Error reading catalog index: " + catalogId, err);
                     return null;
                 }
             });
 
+            // Re-order and structure items cleanly to match the exact visual deck configuration
             const finalHomeData = {};
+            const orderPreference = ["Trending Now", "Popular Movies", "Popular Shows"];
+
+            // First pass: add elements matching preferred category sort keys
+            for (const key of orderPreference) {
+                const found = homeSections.find(s => s && s.name === key);
+                if (found && found.items && found.items.length) {
+                    finalHomeData[key] = found.items;
+                }
+            }
+
+            // Second pass: catch-all fallback for any additional native sections (excluding banned categories)
             for (const section of homeSections) {
-                if (section && section.items && section.items.length) {
+                if (section && section.items && section.items.length && !orderPreference.includes(section.name)) {
                     finalHomeData[section.name] = section.items;
                 }
             }
@@ -132,7 +156,6 @@
                 return cb({ success: true, data: [] });
             }
 
-            // Target search against primary structural collections using strict escape structures
             const primaryCatalog = catalogs[0];
             const searchUrl = `${API_BASE_URL}/catalog/${primaryCatalog.type}/${primaryCatalog.id}/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
             
@@ -171,7 +194,6 @@
                 episodes: []
             });
 
-            // Map standard layout definitions based on catalog structures
             if (meta.type === "movie") {
                 resultItem.episodes = [new Episode({
                     name: meta.name || "Play Video",
@@ -197,7 +219,6 @@
                     });
                 });
             } else {
-                // Structural fallback for elements missing concrete sub-item lists
                 resultItem.episodes = [new Episode({
                     name: meta.name || "Default Episode Stream",
                     url: JSON.stringify({ id: meta.id, type: meta.type, videoId: meta.id }),
@@ -224,7 +245,6 @@
             const rawStreams = streamResponse.streams || [];
 
             const streamResults = rawStreams.map((st) => {
-                // If it's an absolute URL, output directly, otherwise look for an infoHash
                 let directUrl = st.url;
                 if (!directUrl && st.infoHash) {
                     directUrl = `magnet:?xt=urn:btih:${st.infoHash}`;
@@ -246,7 +266,7 @@
         }
     }
 
-    // Register routines globally to match internal interface layer hooks
+    // Register hooks globally
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
