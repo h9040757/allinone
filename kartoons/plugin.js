@@ -3,9 +3,12 @@
     const BASE_API_URL = "https://api.kartoons.me/api/stremio";
     const MANIFEST_URL = `${BASE_API_URL}/manifest.json?token=${TOKEN}`;
     const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
+    
     const HEADERS = {
         "User-Agent": UA,
-        "Accept": "application/json"
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://kartoons.me/",
+        "Origin": "https://kartoons.me"
     };
 
     function safeParse(data) {
@@ -46,15 +49,25 @@
         });
     }
 
+    async function safeHttpGet(url) {
+        try {
+            const res = await http_get(url, HEADERS);
+            return res && res.body ? res.body : null;
+        } catch (e) {
+            console.error("HTTP GET failed for: " + url + " Error: " + e.message);
+            return null;
+        }
+    }
+
     async function getHome(cb) {
         try {
             let movieCatalogId = "kartoons_movies";
             let seriesCatalogId = "kartoons_series";
             let trendingCatalogId = "kartoons_movies";
 
-            try {
-                const manifestRes = await http_get(MANIFEST_URL, HEADERS);
-                const manifest = safeParse(manifestRes.body);
+            const manifestBody = await safeHttpGet(MANIFEST_URL);
+            if (manifestBody) {
+                const manifest = safeParse(manifestBody);
                 if (manifest && manifest.catalogs) {
                     const catalogs = manifest.catalogs;
                     const movieCats = catalogs.filter(c => c.type === "movie");
@@ -72,38 +85,40 @@
                         trendingCatalogId = trendingCat.id;
                     }
                 }
-            } catch (err) {
-                console.error("Manifest parse error, using default catalogs: " + err.message);
             }
 
             const trendingUrl = `${BASE_API_URL}/catalog/movie/${trendingCatalogId}.json?token=${TOKEN}`;
             const moviesUrl = `${BASE_API_URL}/catalog/movie/${movieCatalogId}.json?token=${TOKEN}`;
             const seriesUrl = `${BASE_API_URL}/catalog/series/${seriesCatalogId}.json?token=${TOKEN}`;
 
-            const [trendingRes, moviesRes, seriesRes] = await Promise.all([
-                http_get(trendingUrl, HEADERS),
-                http_get(moviesUrl, HEADERS),
-                http_get(seriesUrl, HEADERS)
+            const [trendingBody, moviesBody, seriesBody] = await Promise.all([
+                safeHttpGet(trendingUrl),
+                safeHttpGet(moviesUrl),
+                safeHttpGet(seriesUrl)
             ]);
 
             const homeData = {};
 
-            if (trendingRes && trendingRes.body) {
-                const metas = safeParse(trendingRes.body)?.metas || [];
+            if (trendingBody) {
+                const metas = safeParse(trendingBody)?.metas || [];
                 const items = metas.map(toMultimediaItem).filter(Boolean);
                 if (items.length > 0) homeData["Trending Now"] = items;
             }
 
-            if (moviesRes && moviesRes.body) {
-                const metas = safeParse(moviesRes.body)?.metas || [];
+            if (moviesBody) {
+                const metas = safeParse(moviesBody)?.metas || [];
                 const items = metas.map(toMultimediaItem).filter(Boolean);
                 if (items.length > 0) homeData["Popular Movies"] = items;
             }
 
-            if (seriesRes && seriesRes.body) {
-                const metas = safeParse(seriesRes.body)?.metas || [];
+            if (seriesBody) {
+                const metas = safeParse(seriesBody)?.metas || [];
                 const items = metas.map(toMultimediaItem).filter(Boolean);
                 if (items.length > 0) homeData["Popular Shows"] = items;
+            }
+
+            if (Object.keys(homeData).length === 0) {
+                throw new Error("No categories loaded from api");
             }
 
             cb({ success: true, data: homeData });
@@ -118,21 +133,21 @@
             const searchMovieUrl = `${BASE_API_URL}/catalog/movie/kartoons_movies/search=${queryEscaped}.json?token=${TOKEN}`;
             const searchSeriesUrl = `${BASE_API_URL}/catalog/series/kartoons_series/search=${queryEscaped}.json?token=${TOKEN}`;
 
-            const [movieRes, seriesRes] = await Promise.all([
-                http_get(searchMovieUrl, HEADERS),
-                http_get(searchSeriesUrl, HEADERS)
+            const [movieBody, seriesBody] = await Promise.all([
+                safeHttpGet(searchMovieUrl),
+                safeHttpGet(searchSeriesUrl)
             ]);
 
             const results = [];
-            if (movieRes && movieRes.body) {
-                const metas = safeParse(movieRes.body)?.metas || [];
+            if (movieBody) {
+                const metas = safeParse(movieBody)?.metas || [];
                 metas.forEach(meta => {
                     const item = toMultimediaItem(meta);
                     if (item) results.push(item);
                 });
             }
-            if (seriesRes && seriesRes.body) {
-                const metas = safeParse(seriesRes.body)?.metas || [];
+            if (seriesBody) {
+                const metas = safeParse(seriesBody)?.metas || [];
                 metas.forEach(meta => {
                     const item = toMultimediaItem(meta);
                     if (item) results.push(item);
@@ -154,10 +169,10 @@
             const id = media.id;
             const metaUrl = `${BASE_API_URL}/meta/${type}/${id}.json?token=${TOKEN}`;
 
-            const res = await http_get(metaUrl, HEADERS);
-            const meta = safeParse(res.body)?.meta;
+            const metaBody = await safeHttpGet(metaUrl);
+            const meta = safeParse(metaBody)?.meta;
 
-            if (!meta) throw new Error("Metadata request returned empty payload");
+            if (!meta) throw new Error("Metadata response was empty");
 
             const title = meta.name || "Untitled";
             const poster = meta.poster || media.poster || "";
@@ -219,8 +234,8 @@
             const reqId = media.videoId || media.id;
             const streamUrl = `${BASE_API_URL}/stream/${type}/${reqId}.json?token=${TOKEN}`;
 
-            const res = await http_get(streamUrl, HEADERS);
-            const streamsObj = safeParse(res.body);
+            const streamBody = await safeHttpGet(streamUrl);
+            const streamsObj = safeParse(streamBody);
             const streamResults = [];
 
             if (streamsObj && streamsObj.streams) {
