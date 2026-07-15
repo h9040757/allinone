@@ -82,7 +82,7 @@
 
     async function getHome(cb) {
         try {
-            // Step 1: Query root Stremio Manifest to dynamically collect catalog layouts (Movies, Series, Trending, etc.)
+            // Step 1: Query root Stremio Manifest to dynamically collect catalog specifications
             const manifest = await fetchJson(MANIFEST_URL);
             const catalogs = manifest.catalogs || [];
 
@@ -90,13 +90,13 @@
                 return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found inside manifest definitions." });
             }
 
-            // Step 2: Extract and fetch content across all discovered catalogs asynchronously
-            const homeSections = await mapLimit(catalogs, 6, async (cat) => {
+            // Step 2: Iterate and scrape content from every catalog index defined inside manifest schema
+            const homeSections = await mapLimit(catalogs, 4, async (cat) => {
                 const catalogId = cat.id;
                 const type = cat.type;
                 const sectionName = cat.name || `${type} Section`;
 
-                // Build the correct Stremio URL mapping parameters for categories like Trending Now
+                // Build standard Stremio protocol URL syntax pathing
                 const catalogUrl = `${API_BASE_URL}/catalog/${type}/${catalogId}.json?token=${TOKEN}`;
                 try {
                     const catalogData = await fetchJson(catalogUrl);
@@ -105,7 +105,7 @@
                     
                     return { name: sectionName, items: mappedItems };
                 } catch (err) {
-                    console.error("Error building catalog row for: " + sectionName, err);
+                    console.error("Error reading catalog index: " + catalogId, err);
                     return null;
                 }
             });
@@ -171,6 +171,7 @@
                 episodes: []
             });
 
+            // Map standard layout definitions based on catalog structures
             if (meta.type === "movie") {
                 resultItem.episodes = [new Episode({
                     name: meta.name || "Play Video",
@@ -196,6 +197,7 @@
                     });
                 });
             } else {
+                // Structural fallback for elements missing concrete sub-item lists
                 resultItem.episodes = [new Episode({
                     name: meta.name || "Default Episode Stream",
                     url: JSON.stringify({ id: meta.id, type: meta.type, videoId: meta.id }),
@@ -222,6 +224,7 @@
             const rawStreams = streamResponse.streams || [];
 
             const streamResults = rawStreams.map((st) => {
+                // If it's an absolute URL, output directly, otherwise look for an infoHash
                 let directUrl = st.url;
                 if (!directUrl && st.infoHash) {
                     directUrl = `magnet:?xt=urn:btih:${st.infoHash}`;
@@ -243,7 +246,7 @@
         }
     }
 
-    // Register hooks globally to map into the application runtime layout engine
+    // Register routines globally to match internal interface layer hooks
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
