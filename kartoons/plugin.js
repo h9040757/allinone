@@ -82,62 +82,76 @@
 
     async function getHome(cb) {
         try {
+            // Step 1: Query root Stremio Manifest to dynamically collect catalog specifications
             const manifest = await fetchJson(MANIFEST_URL);
-            const catalogs = manifest.catalogs || [];
+            let catalogs = manifest.catalogs || [];
 
             if (!catalogs.length) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found." });
+                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found inside manifest definitions." });
             }
 
-            // Map and filter catalogs into the requested target layout categories
-            const homeSections = await mapLimit(catalogs, 6, async (cat) => {
-                const catalogId = cat.id;
-                const type = cat.type;
-                let rawName = (cat.name || "").toLowerCase();
+            // Step 2: Filter and normalize names based on your requirements
+            // Explicitly drops internal playback trackers like "continue watching" 
+            const filteredCategories = catalogs
+                .map(cat => {
+                    const id = String(cat.id).toLowerCase();
+                    const name = String(cat.name).toLowerCase();
+                    
+                    // Filter out local application playback caching states
+                    if (id.includes("continue") || name.includes("continue") || id.includes("watching")) {
+                        return null;
+                    }
 
-                // Explicitly ignore any continue watching or personalized user rows
-                if (rawName.includes("continue") || rawName.includes("watching") || rawName.includes("history")) {
-                    return null;
-                }
+                    // Dynamically map and clean standard Stremio catalog names to match requested sections
+                    let targetName = cat.name;
+                    if (id.includes("trending") || name.includes("trending")) {
+                        targetName = "Trending Now";
+                    } else if ((id.includes("movie") || name.includes("movie")) && (id.includes("popular") || name.includes("popular") || id.includes("top"))) {
+                        targetName = "Popular Movies";
+                    } else if ((id.includes("show") || name.includes("show") || id.includes("series")) && (id.includes("popular") || name.includes("popular") || id.includes("top"))) {
+                        targetName = "Popular Shows";
+                    }
 
-                // Determine display names matching your homepage specifications
-                let targetDisplayName = cat.name;
-                if (rawName.includes("trending")) {
-                    targetDisplayName = "Trending Now";
-                } else if (type === "movie" && (rawName.includes("popular") || rawName.includes("top"))) {
-                    targetDisplayName = "Popular Movies";
-                } else if ((type === "series" || type === "show") && (rawName.includes("popular") || rawName.includes("top"))) {
-                    targetDisplayName = "Popular Shows";
-                }
+                    return {
+                        id: cat.id,
+                        type: cat.type,
+                        name: targetName
+                    };
+                })
+                .filter(Boolean);
 
-                const catalogUrl = `${API_BASE_URL}/catalog/${type}/${catalogId}.json?token=${TOKEN}`;
+            // Step 3: Iterate and scrape content from filtered catalog index targets
+            const homeSections = await mapLimit(filteredCategories, 4, async (cat) => {
+                const catalogUrl = `${API_BASE_URL}/catalog/${cat.type}/${cat.id}.json?token=${TOKEN}`;
                 try {
                     const catalogData = await fetchJson(catalogUrl);
                     const rawMetas = catalogData.metas || [];
                     const mappedItems = rawMetas.map(mapStremioMetaToMedia).filter(Boolean);
                     
-                    return { name: targetDisplayName, items: mappedItems };
+                    // Enforce unique items per section
+                    const seen = new Set();
+                    const uniqueItems = mappedItems.filter(item => {
+                        if (seen.has(item.url)) return false;
+                        seen.add(item.url);
+                        return true;
+                    });
+
+                    return { name: cat.name, items: uniqueItems };
                 } catch (err) {
+                    console.error(`Error reading catalog index path for ${cat.name}: `, err);
                     return null;
                 }
             });
 
-            // Re-order and structure items cleanly to match the exact visual deck configuration
             const finalHomeData = {};
-            const orderPreference = ["Trending Now", "Popular Movies", "Popular Shows"];
-
-            // First pass: add elements matching preferred category sort keys
-            for (const key of orderPreference) {
-                const found = homeSections.find(s => s && s.name === key);
-                if (found && found.items && found.items.length) {
-                    finalHomeData[key] = found.items;
-                }
-            }
-
-            // Second pass: catch-all fallback for any additional native sections (excluding banned categories)
             for (const section of homeSections) {
-                if (section && section.items && section.items.length && !orderPreference.includes(section.name)) {
-                    finalHomeData[section.name] = section.items;
+                if (section && section.items && section.items.length) {
+                    // Combine lists if duplicate structured name targets intersect
+                    if (finalHomeData[section.name]) {
+                        finalHomeData[section.name] = finalHomeData[section.name].concat(section.items);
+                    } else {
+                        finalHomeData[section.name] = section.items;
+                    }
                 }
             }
 
@@ -266,7 +280,6 @@
         }
     }
 
-    // Register hooks globally
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
