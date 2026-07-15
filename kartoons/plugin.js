@@ -1,5 +1,6 @@
 (function () {
     // --- Configuration & Constants ---
+    const MANIFEST_URL = "https://api.kartoons.me/api/stremio/manifest.json?token=1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
     const API_BASE_URL = "https://api.kartoons.me/api/stremio";
     const TOKEN = "1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
 
@@ -10,15 +11,6 @@
     };
 
     // --- Utilities & Serialization ---
-    function cleanTitle(rawTitle) {
-        if (!rawTitle) return "Untitled Content";
-        // Strips common automated system prefixing brands like "Kartoons - " or suffixing brand noise
-        return String(rawTitle)
-            .replace(/^kartoons\s*[-|:]\s*/i, "")
-            .replace(/\s*[-|:]\s*kartoons$/i, "")
-            .trim();
-    }
-
     function safeParse(data) {
         if (!data) return null;
         if (typeof data === "object") return data;
@@ -55,7 +47,7 @@
         else if (meta.type === "anime") type = "anime";
 
         return new MultimediaItem({
-            title: cleanTitle(meta.name),
+            title: meta.name || "Untitled Content",
             url: payload(meta.id, meta.type || "series", meta.poster),
             posterUrl: meta.poster || "",
             bannerUrl: meta.background || "",
@@ -90,26 +82,30 @@
 
     async function getHome(cb) {
         try {
-            const categories = [
-                { path: "/category/Trending Now/", name: "Trending Now", type: "anime" },
-                { path: "/category/Popular Movies/", name: "Popular Movies", type: "anime" },
-                { path: "/category/Popular Shows/", name: "Popular Shows", type: "anime" }
-            ];
+            // Step 1: Query root Stremio Manifest to dynamically collect catalog layouts (Movies, Series, Trending, etc.)
+            const manifest = await fetchJson(MANIFEST_URL);
+            const catalogs = manifest.catalogs || [];
 
-            const homeSections = await mapLimit(categories, 3, async (cat) => {
-                // Formatting custom structural paths directly to fetch API targeting components
-                // Converts /category/Name/ -> catalog/anime/Name.json
-                const normalizedPath = cat.path.replace(/^\/category\//, "").replace(/\/$/, "");
-                const catalogUrl = `${API_BASE_URL}/catalog/${cat.type}/${encodeURIComponent(normalizedPath)}.json?token=${TOKEN}`;
-                
+            if (!catalogs.length) {
+                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found inside manifest definitions." });
+            }
+
+            // Step 2: Extract and fetch content across all discovered catalogs asynchronously
+            const homeSections = await mapLimit(catalogs, 6, async (cat) => {
+                const catalogId = cat.id;
+                const type = cat.type;
+                const sectionName = cat.name || `${type} Section`;
+
+                // Build the correct Stremio URL mapping parameters for categories like Trending Now
+                const catalogUrl = `${API_BASE_URL}/catalog/${type}/${catalogId}.json?token=${TOKEN}`;
                 try {
                     const catalogData = await fetchJson(catalogUrl);
                     const rawMetas = catalogData.metas || [];
                     const mappedItems = rawMetas.map(mapStremioMetaToMedia).filter(Boolean);
                     
-                    return { name: cat.name, items: mappedItems };
+                    return { name: sectionName, items: mappedItems };
                 } catch (err) {
-                    console.error("Error fetching path location context: " + cat.path, err);
+                    console.error("Error building catalog row for: " + sectionName, err);
                     return null;
                 }
             });
@@ -129,8 +125,16 @@
 
     async function search(query, cb) {
         try {
-            // Re-route fallbacks straight into primary structural targets using custom escaping blocks
-            const searchUrl = `${API_BASE_URL}/catalog/anime/Trending Now/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
+            const manifest = await fetchJson(MANIFEST_URL);
+            const catalogs = manifest.catalogs || [];
+            
+            if (!catalogs.length) {
+                return cb({ success: true, data: [] });
+            }
+
+            // Target search against primary structural collections using strict escape structures
+            const primaryCatalog = catalogs[0];
+            const searchUrl = `${API_BASE_URL}/catalog/${primaryCatalog.type}/${primaryCatalog.id}/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
             
             const searchData = await fetchJson(searchUrl);
             const rawMetas = searchData.metas || [];
@@ -156,7 +160,7 @@
             else if (meta.type === "anime") itemType = "anime";
 
             const resultItem = new MultimediaItem({
-                title: cleanTitle(meta.name),
+                title: meta.name || "Untitled",
                 url: payload(meta.id, meta.type, meta.poster),
                 posterUrl: meta.poster || metaInput.poster || "",
                 bannerUrl: meta.background || "",
@@ -169,7 +173,7 @@
 
             if (meta.type === "movie") {
                 resultItem.episodes = [new Episode({
-                    name: cleanTitle(meta.name),
+                    name: meta.name || "Play Video",
                     url: JSON.stringify({ id: meta.id, type: "movie", videoId: meta.id }),
                     season: 1,
                     episode: 1
@@ -193,7 +197,7 @@
                 });
             } else {
                 resultItem.episodes = [new Episode({
-                    name: cleanTitle(meta.name),
+                    name: meta.name || "Default Episode Stream",
                     url: JSON.stringify({ id: meta.id, type: meta.type, videoId: meta.id }),
                     season: 1,
                     episode: 1
@@ -239,7 +243,7 @@
         }
     }
 
-    // Register routines globally to match internal interface layer hooks
+    // Register hooks globally to map into the application runtime layout engine
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
