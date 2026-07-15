@@ -1,6 +1,5 @@
 (function () {
     // --- Configuration & Constants ---
-    const MANIFEST_URL = "https://api.kartoons.me/api/stremio/manifest.json?token=1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
     const API_BASE_URL = "https://api.kartoons.me/api/stremio";
     const TOKEN = "1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
 
@@ -82,63 +81,29 @@
 
     async function getHome(cb) {
         try {
-            // Step 1: Query root Stremio Manifest to dynamically collect catalog specifications
-            const manifest = await fetchJson(MANIFEST_URL);
-            let catalogs = manifest.catalogs || [];
+            const categories = [
+                { path: "/category/Trending Now/", name: "Trending Now", type: "anime" },
+                { path: "/category/Popular Movies/", name: "Popular Movies", type: "anime" },
+                { path: "/category/Popular Shows/", name: "Popular Shows", type: "anime" },
+            ];
 
-            if (!catalogs.length) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No operational catalogs found inside manifest definitions." });
-            }
-
-            // Step 2: Filter and normalize names based on your requirements
-            // Explicitly drops internal playback trackers like "continue watching" 
-            const filteredCategories = catalogs
-                .map(cat => {
-                    const id = String(cat.id).toLowerCase();
-                    const name = String(cat.name).toLowerCase();
-                    
-                    // Filter out local application playback caching states
-                    if (id.includes("continue") || name.includes("continue") || id.includes("watching")) {
-                        return null;
-                    }
-
-                    // Dynamically map and clean standard Stremio catalog names to match requested sections
-                    let targetName = cat.name;
-                    if (id.includes("trending") || name.includes("trending")) {
-                        targetName = "Trending Now";
-                    } else if ((id.includes("movie") || name.includes("movie")) && (id.includes("popular") || name.includes("popular") || id.includes("top"))) {
-                        targetName = "Popular Movies";
-                    } else if ((id.includes("show") || name.includes("show") || id.includes("series")) && (id.includes("popular") || name.includes("popular") || id.includes("top"))) {
-                        targetName = "Popular Shows";
-                    }
-
-                    return {
-                        id: cat.id,
-                        type: cat.type,
-                        name: targetName
-                    };
-                })
-                .filter(Boolean);
-
-            // Step 3: Iterate and scrape content from filtered catalog index targets
-            const homeSections = await mapLimit(filteredCategories, 4, async (cat) => {
-                const catalogUrl = `${API_BASE_URL}/catalog/${cat.type}/${cat.id}.json?token=${TOKEN}`;
+            const homeSections = await mapLimit(categories, 3, async (cat) => {
+                // Sanitize path parameter to build a correct Stremio protocol URL lookup
+                // Stremio endpoints typically use catalog/{type}/{id}.json format. 
+                // We extract the base segment matching your structure.
+                let catalogId = cat.path.replace(/^\/category\//, "").replace(/\/$/, "");
+                catalogId = encodeURIComponent(catalogId);
+                
+                const catalogUrl = `${API_BASE_URL}/catalog/${cat.type}/${catalogId}.json?token=${TOKEN}`;
+                
                 try {
                     const catalogData = await fetchJson(catalogUrl);
                     const rawMetas = catalogData.metas || [];
                     const mappedItems = rawMetas.map(mapStremioMetaToMedia).filter(Boolean);
                     
-                    // Enforce unique items per section
-                    const seen = new Set();
-                    const uniqueItems = mappedItems.filter(item => {
-                        if (seen.has(item.url)) return false;
-                        seen.add(item.url);
-                        return true;
-                    });
-
-                    return { name: cat.name, items: uniqueItems };
+                    return { name: cat.name, items: mappedItems };
                 } catch (err) {
-                    console.error(`Error reading catalog index path for ${cat.name}: `, err);
+                    console.error("Error reading home section index: " + cat.name, err);
                     return null;
                 }
             });
@@ -146,12 +111,7 @@
             const finalHomeData = {};
             for (const section of homeSections) {
                 if (section && section.items && section.items.length) {
-                    // Combine lists if duplicate structured name targets intersect
-                    if (finalHomeData[section.name]) {
-                        finalHomeData[section.name] = finalHomeData[section.name].concat(section.items);
-                    } else {
-                        finalHomeData[section.name] = section.items;
-                    }
+                    finalHomeData[section.name] = section.items;
                 }
             }
 
@@ -163,15 +123,8 @@
 
     async function search(query, cb) {
         try {
-            const manifest = await fetchJson(MANIFEST_URL);
-            const catalogs = manifest.catalogs || [];
-            
-            if (!catalogs.length) {
-                return cb({ success: true, data: [] });
-            }
-
-            const primaryCatalog = catalogs[0];
-            const searchUrl = `${API_BASE_URL}/catalog/${primaryCatalog.type}/${primaryCatalog.id}/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
+            // Default search requests against the primary index profile parameters
+            const searchUrl = `${API_BASE_URL}/catalog/anime/Trending%20Now/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
             
             const searchData = await fetchJson(searchUrl);
             const rawMetas = searchData.metas || [];
@@ -280,6 +233,7 @@
         }
     }
 
+    // Register routines globally to match internal interface layer hooks
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
