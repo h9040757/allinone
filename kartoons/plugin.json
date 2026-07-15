@@ -1,17 +1,17 @@
 {
-  "packageName": "me.kartoons.skystream",
-  "name": "Kartoons.me",
+  "packageName": "me.kartoons.plugin",
+  "name": "Kartoons",
   "version": 1,
-  "baseUrl": "https://kartoons.me",
-  "description": "cartoon",
+  "baseUrl": "https://api.kartoons.me/api/stremio",
+  "description": "Kartoons plugin utilizing the Stremio API provider",
   "authors": [
-    "Community Developer"
+    "SkyStream Developer"
   ],
   "languages": [
-    "en",
-    "hi"
+    "en"
   ],
   "categories": [
+    "Anime",
     "Cartoon",
     "Movie",
     "Series"
