@@ -3,14 +3,17 @@
     const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     const HEADERS = {
         "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": MAIN_URL + "/"
     };
 
     const HOME_SECTIONS = [
-        { path: "", name: "Trending Now", type: "series" },
+        { path: "", name: "Trending Now", type: "movie" },
         { path: "movies", name: "Popular Movies", type: "movie" },
-        { path: "serie", name: "Popular Shows", type: "series" },
+        { path: "serie", name: "Popular Shows", type: "series" }
     ];
+
+    // --- Core Helper Functions ---
 
     function text(value) {
         return (value == null ? "" : String(value)).replace(/\s+/g, " ").trim();
@@ -89,7 +92,7 @@
 
     function detectType(url, fallback) {
         if (/\/movies?\//i.test(url) || /type=movies/i.test(url)) return "movie";
-        if (/\/series?\//i.test(url) || /\/serie\//i.test(url) || /type=series/i.test(url)) return "series";
+        if (/\/serie\//i.test(url) || /type=series/i.test(url)) return "series";
         return fallback || "series";
     }
 
@@ -105,49 +108,18 @@
 
     function qualityFromText(value, fallback) {
         const raw = String(value || "");
-        const size = raw.match(/(?:^|[^\d])([1-9]\d{2,3})\s*p(?:[^\d]|$)/i);
-        if (size) return parseInt(size[1], 10);
-        if (/4k|2160/i.test(raw)) return 2160;
-        if (/1440/i.test(raw)) return 1440;
-        if (/1080|fhd/i.test(raw)) return 1080;
-        if (/720|hd/i.test(raw)) return 720;
-        if (/480|sd/i.test(raw)) return 480;
+        if (/2160|4k/i.test(raw)) return 2160;
+        if (/1080/i.test(raw)) return 1080;
+        if (/720/i.test(raw)) return 720;
+        if (/480/i.test(raw)) return 480;
         if (/360/i.test(raw)) return 360;
         return fallback || 0;
-    }
-
-    function streamName(source, quality, tag) {
-        const badge = quality ? ` [${quality}p]` : "";
-        const suffix = tag ? ` [${tag}]` : "";
-        return `${source}${badge}${suffix}`;
-    }
-
-    function encodeBase64String(value) {
-        const input = String(value || "");
-        try {
-            if (typeof btoa === "function") return btoa(input);
-        } catch (e) {}
-        try {
-            if (typeof Buffer !== "undefined") return Buffer.from(input, "binary").toString("base64");
-        } catch (e) {}
-        return "";
-    }
-
-    function proxifyUrl(url, headers, referer, mirrorHosts) {
-        return "MAGIC_PROXY_v2" + encodeBase64String(JSON.stringify({
-            url,
-            headers: headers || {},
-            options: {
-                referer: referer || "",
-                mirrorHosts: mirrorHosts || []
-            }
-        }));
     }
 
     function createStream(url, source, headers, quality, tag, type) {
         const stream = {
             url,
-            source: streamName(source, quality, tag),
+            source: `${source}${quality ? ` [${quality}p]` : ""}${tag ? ` [${tag}]` : ""}`,
             quality: quality || undefined,
             headers: headers || { "User-Agent": UA }
         };
@@ -161,16 +133,6 @@
     async function getText(url, headers) {
         const res = await http_get(url, headers || HEADERS);
         return res && res.body ? res.body : "";
-    }
-
-    async function postText(url, headers, body) {
-        try {
-            const res = await http_post(url, headers, body);
-            return res && res.body ? res.body : "";
-        } catch (e) {
-            const res = await http_post(url, body, headers);
-            return res && res.body ? res.body : "";
-        }
     }
 
     async function mapLimit(items, limit, worker) {
@@ -213,22 +175,14 @@
         });
     }
 
-    function homeUrl(path, page) {
-        if (!path) {
-            return page > 1 ? `${MAIN_URL}/page/${page}/` : `${MAIN_URL}/`;
-        }
-        return `${MAIN_URL}/${path}/page/${page}/`;
-    }
+    // --- HTML Parsing and Items mapping ---
 
     function toMedia(element, fallbackType, base) {
-        const link = qs(element, "a");
-        const href = fixUrl(attr(link, ["href"]), base || MAIN_URL);
-        if (!href) return null;
-
-        const titleText = text((qs(element, "header h2") || qs(element, "h2") || qs(element, "h3") || qs(element, ".title"))?.textContent);
-        const altText = attr(qs(element, "img"), ["alt", "title"]);
-        const title = titleText || altText || "Untitled";
-
+        const titleEl = qs(element, ".title a") || qs(element, "h3 a") || qs(element, "h2 a");
+        const title = text(titleEl?.textContent || attr(qs(element, "img"), ["alt"]));
+        const href = fixUrl(attr(titleEl || qs(element, "a"), ["href"]), base || MAIN_URL);
+        if (!title || !href) return null;
+        
         const poster = getImageAttr(qs(element, "img"), href);
         const type = detectType(href, fallbackType);
         return new MultimediaItem({
@@ -239,19 +193,24 @@
         });
     }
 
-    async function parseArticleList(html, type, base) {
+    async function parseList(html, type, base) {
         const doc = await parseHtml(html || "");
-        const items = qsa(doc, "article, .item, .poster").map((el) => toMedia(el, type, base)).filter(Boolean);
-        return items;
+        // Select standard items from Dooplay or catalog list structures
+        const items = qsa(doc, ".items .item, article.item, .poster, .movies-list .movie");
+        return items.map((item) => toMedia(item, type, base)).filter(Boolean);
     }
+
+    // --- SkyStream Core Interface Functions ---
 
     async function getHome(cb) {
         try {
             const sectionResults = await mapLimit(HOME_SECTIONS, 3, async (section) => {
-                const html = await getText(homeUrl(section.path, 1), HEADERS);
-                const items = await parseArticleList(html, section.type, MAIN_URL);
+                const sectionUrl = section.path ? `${MAIN_URL}/${section.path}/` : MAIN_URL;
+                const html = await getText(sectionUrl, HEADERS);
+                const items = await parseList(html, section.type, MAIN_URL);
                 return { name: section.name, items };
             });
+
             const data = {};
             for (const section of sectionResults) {
                 if (section && section.items && section.items.length) {
@@ -268,131 +227,68 @@
         try {
             const searchUrl = `${MAIN_URL}/?s=${encodeURIComponent(query)}`;
             const html = await getText(searchUrl, HEADERS);
-            const items = await parseArticleList(html, "series", MAIN_URL);
+            const items = await parseList(html, "series", MAIN_URL);
             cb({ success: true, data: items });
         } catch (e) {
             cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message || String(e) });
         }
     }
 
-    function collectTags(doc) {
-        const tags = [];
-        for (const el of qsa(doc, ".sgeneros a, a[href*='/genre/']")) {
-            const val = text(el.textContent);
-            if (val && tags.indexOf(val) < 0) tags.push(val);
-        }
-        return tags;
-    }
-
-    function parseYear(doc) {
-        const elements = qsa(doc, ".date, .year, span, a");
-        for (const el of elements) {
-            const val = text(el.textContent);
-            const match = val.match(/^(19|20)\d{2}$/);
-            if (match) return parseInt(val, 10);
-        }
-        return undefined;
-    }
-
-    function seasonNumber(button, index) {
-        const raw = attr(button, ["data-season", "data-num", "data-id"]) || text(button.textContent);
-        const found = String(raw).match(/\d+/);
-        return found ? parseInt(found[0], 10) : index + 1;
-    }
-
-    function episodeNumber(index) {
-        return index + 1;
-    }
-
-    function episodeName(rawName, index) {
-        const number = episodeNumber(index);
-        return String(rawName || "").indexOf(`x${number}`) >= 0 ? `Episode ${number}` : rawName;
-    }
-
-    async function loadSeason(button, seasonIndex, parentPoster) {
-        const postId = attr(button, ["data-post", "data-id", "data-post-id"]);
-        const dataSeason = attr(button, ["data-season", "data-num"]) || String(seasonNumber(button, seasonIndex));
-        if (!postId || !dataSeason) return [];
-        const body = `action=action_select_season&season=${encodeURIComponent(dataSeason)}&post=${encodeURIComponent(postId)}`;
-        const html = await postText(`${MAIN_URL}/wp-admin/admin-ajax.php`, {
-            ...HEADERS,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": `${MAIN_URL}/`
-        }, body);
-        const doc = await parseHtml(html);
-        const season = seasonNumber(button, seasonIndex);
-        return qsa(doc, "li article, article, li").map((article, index) => {
-            const link = qs(article, "a");
-            const href = fixUrl(attr(link, ["href"]), MAIN_URL);
-            if (!href) return null;
-            const rawName = text((qs(article, "h2.entry-title") || qs(article, "h2") || qs(article, "h3") || qs(article, ".episodiotitle"))?.textContent) || `Episode ${index + 1}`;
-            const name = episodeName(rawName, index);
-            const poster = getImageAttr(qs(article, "img"), href) || parentPoster || "";
-            return new Episode({
-                name,
-                url: payload(href, poster, "episode"),
-                posterUrl: poster,
-                season,
-                episode: episodeNumber(index)
-            });
-        }).filter(Boolean);
-    }
-
     async function load(urlStr, cb) {
         try {
             const media = inputPayload(urlStr);
             if (!media.url) throw new Error("Invalid URL data");
-            const html = await getText(media.url, { ...HEADERS, "Referer": `${MAIN_URL}/` });
+            
+            const html = await getText(media.url, { ...HEADERS, "Referer": MAIN_URL + "/" });
             const doc = await parseHtml(html);
-            const title = text((qs(doc, "h1") || qs(doc, "header h1") || qs(doc, ".data h1"))?.textContent) || "No Title";
-            const poster = getImageAttr(qs(doc, ".poster img") || qs(doc, "article img") || qs(doc, "div.bd img"), media.url) || media.poster || "";
-            const description = text((qs(doc, "#overview-text p") || qs(doc, ".description p") || qs(doc, ".entry-content p") || qs(doc, "#info p"))?.textContent);
+            
+            const title = text(qs(doc, "h1")?.textContent || qs(doc, ".data h1")?.textContent) || "No Title";
+            const poster = getImageAttr(qs(doc, ".poster img") || qs(doc, ".post-thumbnail img"), media.url) || media.poster || "";
+            const description = text(qs(doc, "#info p") || qs(doc, ".description p") || qs(doc, "#overview-text")?.textContent);
             const type = detectType(media.url, media.type);
-            const tags = collectTags(doc);
-            const year = parseYear(doc);
-            const recommendations = qsa(doc, "#single_relacionados article, .related article, .owl-item article")
-                .map((article) => toMedia(article, "series", media.url))
-                .filter((item) => item && item.url !== urlStr)
-                .slice(0, 24);
+
+            const tags = qsa(doc, ".sgenres a").map(el => text(el.textContent)).filter(Boolean);
+            const yearText = text(qs(doc, ".date")?.textContent || qs(doc, "span.year")?.textContent);
+            const year = parseInt(yearText.match(/\d{4}/)?.[0], 10) || undefined;
 
             if (type === "series") {
                 const episodes = [];
-                // Look for static Dooplay episode layouts
-                const staticSeasons = qsa(doc, ".se-c, #seasons .se-c");
-                if (staticSeasons.length > 0) {
-                    staticSeasons.forEach((seasonEl, sIdx) => {
-                        const seasonNumStr = text(qs(seasonEl, ".title, .se-q")?.textContent);
-                        const seasonMatch = seasonNumStr.match(/\d+/);
-                        const seasonNum = seasonMatch ? parseInt(seasonMatch[0], 10) : (sIdx + 1);
-
-                        const epList = qsa(seasonEl, ".episodios li");
-                        epList.forEach((epEl, epIdx) => {
+                // Look for seasons in standard theme layout (#seasons or .se-c)
+                const seasonContainers = qsa(doc, "#seasons .se-c");
+                if (seasonContainers.length > 0) {
+                    seasonContainers.forEach((container, sIdx) => {
+                        const seasonNum = sIdx + 1;
+                        const epElements = qsa(container, ".se-a li");
+                        epElements.forEach((epEl, epIdx) => {
                             const link = qs(epEl, "a");
                             const href = fixUrl(attr(link, ["href"]), MAIN_URL);
                             if (!href) return;
-                            const name = text(link.textContent) || `Episode ${epIdx + 1}`;
-                            const posterUrl = getImageAttr(qs(epEl, "img"), href) || poster;
-                            const numText = text(qs(epEl, ".numerando")?.textContent || "");
-                            const numMatch = numText.match(/\d+\s*x\s*(\d+)/i);
-                            const epNum = numMatch ? parseInt(numMatch[1], 10) : (epIdx + 1);
-
+                            const epName = text(qs(epEl, ".episodiotitle a")?.textContent || link?.textContent) || `Episode ${epIdx + 1}`;
                             episodes.push(new Episode({
-                                name,
-                                url: payload(href, posterUrl, "episode"),
-                                posterUrl,
+                                name: epName,
+                                url: payload(href, poster, "episode"),
+                                posterUrl: poster,
                                 season: seasonNum,
-                                episode: epNum
+                                episode: epIdx + 1
                             }));
                         });
                     });
-                }
-
-                // Fall back to Torofilm AJAX if no static episodes exist
-                if (episodes.length === 0) {
-                    const buttons = qsa(doc, "div.season-buttons a, .toro-season-button");
-                    const loaded = await mapLimit(buttons, 4, (button, index) => loadSeason(button, index, poster));
-                    episodes.push.apply(episodes, flatten(loaded));
+                } else {
+                    // Fallback for single flat list of episodes
+                    const episodeElements = qsa(doc, ".episodios li, .list-episodes li");
+                    episodeElements.forEach((epEl, index) => {
+                        const link = qs(epEl, "a");
+                        const href = fixUrl(attr(link, ["href"]), MAIN_URL);
+                        if (!href) return;
+                        const epName = text(link?.textContent) || `Episode ${index + 1}`;
+                        episodes.push(new Episode({
+                            name: epName,
+                            url: payload(href, poster, "episode"),
+                            posterUrl: poster,
+                            season: 1,
+                            episode: index + 1
+                        }));
+                    });
                 }
 
                 cb({
@@ -406,13 +302,12 @@
                         year,
                         tags,
                         episodes,
-                        recommendations
                     })
                 });
                 return;
             }
 
-            // Fallback default for Movies
+            // Fallback configuration for Movies
             cb({
                 success: true,
                 data: new MultimediaItem({
@@ -427,8 +322,7 @@
                         name: title,
                         url: payload(media.url, poster, "movie"),
                         posterUrl: poster
-                    })],
-                    recommendations
+                    })]
                 })
             });
         } catch (e) {
@@ -436,64 +330,49 @@
         }
     }
 
-    async function expandHlsStreams(url, source, headers, fallbackQuality) {
-        const resolvedHeaders = headers || { "User-Agent": UA };
-        return [createStream(proxifyUrl(url, resolvedHeaders, resolvedHeaders.Referer || resolvedHeaders.referer || "", [getHost(url)].filter(Boolean)), source, {}, fallbackQuality || qualityFromText(url, 0), "adaptive", "hls")];
+    // --- Stream Extraction Engine ---
+
+    async function extractDirectMedia(url, source) {
+        const streams = [];
+        try {
+            if (/\.m3u8(?:\?|$)/i.test(url)) {
+                streams.push(createStream(url, source, { "User-Agent": UA }, 1080, "hls"));
+            } else if (/\.mp4(?:\?|$)/i.test(url)) {
+                streams.push(createStream(url, source, { "User-Agent": UA }, qualityFromText(url, 720)));
+            }
+        } catch (e) {}
+        return streams;
     }
 
     async function loadExtractor(url, referer) {
-        const fixed = fixUrl(url, referer || MAIN_URL);
+        const fixed = fixUrl(url, referer);
         if (!fixed) return [];
         const host = getHost(fixed);
-        if (/\.m3u8(?:\?|$)/i.test(fixed)) return expandHlsStreams(fixed, host || "HLS", { "User-Agent": UA, "Referer": referer || `${MAIN_URL}/` });
-        if (/\.mp4(?:\?|$)/i.test(fixed)) return [createStream(fixed, host || "MP4", { "User-Agent": UA, "Referer": referer || `${MAIN_URL}/` }, qualityFromText(fixed, 0))];
-        return [createStream(fixed, host || "Server", { "User-Agent": UA, "Referer": referer || `${MAIN_URL}/` }, qualityFromText(fixed, 0))];
+
+        // Standard dynamic handlers for universal video host providers
+        if (/\.m3u8|\.mp4/i.test(fixed)) {
+            return extractDirectMedia(fixed, host || "Direct Video");
+        }
+        
+        // Pass to base fallback if host matching doesn't identify custom extraction steps
+        return [createStream(fixed, host || "Embed Server", { "User-Agent": UA, "Referer": referer })];
     }
 
     async function loadStreams(urlInfo, cb) {
         try {
             const media = inputPayload(urlInfo);
-            if (!media.url) throw new Error("Invalid URL data");
-            const html = await getText(media.url, { ...HEADERS, "Referer": `${MAIN_URL}/` });
+            if (!media.url) throw new Error("Invalid URL info data");
+            const html = await getText(media.url, { ...HEADERS, "Referer": MAIN_URL + "/" });
             const doc = await parseHtml(html);
 
-            const iframeUrls = [];
-
-            // Detect and collect AJAX player options (common in Dooplay theme configurations)
-            const playerOptions = qsa(doc, "li.dooplay_player_option, .player-option");
-            for (const option of playerOptions) {
-                const post = attr(option, ["data-post"]);
-                const nume = attr(option, ["data-nume"]);
-                const type = attr(option, ["data-type"]);
-                if (post && nume && type) {
-                    try {
-                        const body = `action=doo_player_ajax&post=${encodeURIComponent(post)}&nume=${encodeURIComponent(nume)}&type=${encodeURIComponent(type)}`;
-                        const response = await postText(`${MAIN_URL}/wp-admin/admin-ajax.php`, {
-                            ...HEADERS,
-                            "Content-Type": "application/x-www-form-urlencoded",
-                            "X-Requested-With": "XMLHttpRequest"
-                        }, body);
-                        const json = safeParse(response);
-                        const embedUrl = json && (json.embed_url || json.url);
-                        if (embedUrl) {
-                            if (embedUrl.includes("<iframe")) {
-                                const iframeMatch = embedUrl.match(/src=["']([^"']+)["']/i);
-                                if (iframeMatch) iframeUrls.push(fixUrl(iframeMatch[1], MAIN_URL));
-                            } else {
-                                iframeUrls.push(fixUrl(embedUrl, MAIN_URL));
-                            }
-                        }
-                    } catch (e) {}
-                }
-            }
-
-            // Gather any static iframes fallback
-            const staticIframes = qsa(doc, "#options-0 iframe, iframe, .play-box-iframe iframe")
+            // Scrape options from tab/embed triggers or typical option list targets
+            const iframes = qsa(doc, ".play-box-iframe iframe, #player_iframe, .source-box iframe, iframe");
+            const iframeUrls = iframes
                 .map((iframe) => fixUrl(attr(iframe, ["data-src", "src"]), media.url))
-                .filter(Boolean);
+                .filter(url => url && !/about:blank|google|facebook|disqus/i.test(url));
 
-            const combinedUrls = Array.from(new Set(iframeUrls.concat(staticIframes)));
-            const loaded = await mapLimit(combinedUrls, 6, (src) => loadExtractor(src, media.url));
+            // Run requests to resolve each target option
+            const loaded = await mapLimit(iframeUrls, 4, (src) => loadExtractor(src, media.url));
             cb({ success: true, data: dedupeStreams(flatten(loaded)) });
         } catch (e) {
             cb({ success: false, errorCode: "STREAM_ERROR", message: e.message || String(e) });
