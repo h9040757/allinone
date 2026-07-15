@@ -44,35 +44,6 @@
         return undefined;
     }
 
-    // Identifies and renames Stremio catalogs to match requested home sections
-    function getSectionName(catalog) {
-        const id = String(catalog.id || "").toLowerCase();
-        const name = String(catalog.name || "").toLowerCase();
-        const type = String(catalog.type || "").toLowerCase();
-
-        if (id.includes("trending") || name.includes("trending") || id.includes("trend") || name.includes("trend")) {
-            return "Trending Now";
-        }
-        
-        if (id.includes("popular") || name.includes("popular")) {
-            if (type === "movie") return "Popular Movies";
-            if (type === "series" || type === "tv" || type === "show") return "Popular Shows";
-            return "Popular";
-        }
-
-        if (type === "movie") {
-            if (name.includes("kartoons") || id.includes("kartoons")) return "Kartoons Movies";
-            return "Movies";
-        }
-
-        if (type === "series" || type === "tv" || type === "show") {
-            if (name.includes("kartoons") || id.includes("kartoons")) return "Kartoons Shows";
-            return "Shows";
-        }
-
-        return catalog.name || (type.charAt(0).toUpperCase() + type.slice(1));
-    }
-
     // --- Core Methods ---
 
     async function getHome(cb) {
@@ -81,11 +52,33 @@
             const catalogs = manifest.catalogs || [];
             const homeData = {};
 
-            // Fetch and map catalog items concurrently
-            const promises = catalogs.map(async (cat) => {
-                if (!cat.id || !cat.type) return null;
-                
-                const sectionName = getSectionName(cat);
+            for (let i = 0; i < catalogs.length; i++) {
+                const cat = catalogs[i];
+                if (!cat.id || !cat.type) continue;
+
+                const lowerId = String(cat.id).toLowerCase();
+                const lowerName = String(cat.name || "").toLowerCase();
+
+                // 1. Remove "Continue Watching" or temporary tracking sections
+                if (
+                    lowerId.includes("continue") || lowerName.includes("continue") || 
+                    lowerId.includes("watching") || lowerName.includes("watching") ||
+                    lowerId.includes("recent") || lowerName.includes("recent") ||
+                    lowerId.includes("history") || lowerName.includes("history")
+                ) {
+                    continue; 
+                }
+
+                // 2. Map and rename sections matching requested categories
+                let catName = cat.name || cat.type;
+                if (lowerId.includes("trending") || lowerName.includes("trending")) {
+                    catName = "Trending Now";
+                } else if (cat.type === "movie" && (lowerId.includes("popular") || lowerName.includes("popular"))) {
+                    catName = "Popular Movies";
+                } else if (cat.type === "series" && (lowerId.includes("popular") || lowerName.includes("popular"))) {
+                    catName = "Popular Shows";
+                }
+
                 const path = `/catalog/${cat.type}/${cat.id}.json`;
                 
                 try {
@@ -94,7 +87,7 @@
                     const metas = data && data.metas ? data.metas : [];
 
                     if (metas.length > 0) {
-                        const items = metas.map((m) => new MultimediaItem({
+                        homeData[catName] = metas.map((m) => new MultimediaItem({
                             title: m.name,
                             url: JSON.stringify({ type: m.type || cat.type, id: m.id }),
                             posterUrl: m.poster,
@@ -102,52 +95,17 @@
                             description: m.description,
                             year: m.releaseInfo ? parseInt(m.releaseInfo) : undefined
                         }));
-                        return { name: sectionName, items: items };
                     }
                 } catch (err) {
-                    console.error(`Error loading catalog ${sectionName}:`, err);
-                }
-                return null;
-            });
-
-            const results = await Promise.all(promises);
-
-            // Group loaded items
-            results.forEach((res) => {
-                if (res && res.items.length > 0) {
-                    homeData[res.name] = res.items;
-                }
-            });
-
-            // Set custom display priority order for UI presentation
-            const orderedHomeData = {};
-            const preferredOrder = [
-                "Trending Now",
-                "Popular Movies",
-                "Popular Shows",
-                "Kartoons Movies",
-                "Kartoons Shows"
-            ];
-
-            // 1. Add preferred ordered sections
-            for (const key of preferredOrder) {
-                if (homeData[key]) {
-                    orderedHomeData[key] = homeData[key];
+                    console.error(`Error loading catalog ${catName}:`, err);
                 }
             }
 
-            // 2. Add remaining catalogs if present
-            for (const key of Object.keys(homeData)) {
-                if (!orderedHomeData[key]) {
-                    orderedHomeData[key] = homeData[key];
-                }
+            if (Object.keys(homeData).length === 0) {
+                return cb({ success: false, errorCode: "HOME_ERROR", message: "No data found on home." });
             }
 
-            if (Object.keys(orderedHomeData).length === 0) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No sections could be loaded." });
-            }
-
-            cb({ success: true, data: orderedHomeData });
+            cb({ success: true, data: homeData });
         } catch (e) {
             cb({ success: false, errorCode: "HOME_ERROR", message: e.message || String(e) });
         }
@@ -185,7 +143,7 @@
                     }));
                     allResults = allResults.concat(mapped);
                 } catch (err) {
-                    console.error("Search query execution failed:", err);
+                    console.error("Search failed for catalog:", err);
                 }
             }
 
@@ -208,7 +166,7 @@
         try {
             const payload = safeParse(urlStr);
             if (!payload || !payload.id || !payload.type) {
-                throw new Error("Invalid parameters passed.");
+                throw new Error("Invalid request payload.");
             }
 
             const path = `/meta/${payload.type}/${payload.id}.json`;
@@ -216,7 +174,7 @@
             const data = safeParse(res.body);
             const meta = data && data.meta ? data.meta : null;
 
-            if (!meta) throw new Error("Metadata request returned empty.");
+            if (!meta) throw new Error("Metadata not found.");
 
             let episodes = [];
             
@@ -263,7 +221,7 @@
         try {
             const payload = safeParse(urlStr);
             if (!payload || !payload.id || !payload.type) {
-                throw new Error("Parameters missing for resolving stream.");
+                throw new Error("Invalid request payload for streams.");
             }
 
             const path = `/stream/${payload.type}/${payload.id}.json`;
