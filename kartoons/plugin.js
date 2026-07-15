@@ -1,85 +1,112 @@
 (function () {
-    // --- Constants ---
-    const BASE_URL = "https://api.kartoons.me/api/stremio";
     const TOKEN = "1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
+    const BASE_API_URL = "https://api.kartoons.me/api/stremio";
+    const MANIFEST_URL = `${BASE_API_URL}/manifest.json?token=${TOKEN}`;
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
     const HEADERS = {
+        "User-Agent": UA,
         "Accept": "application/json"
     };
 
-    // --- Helpers ---
-    async function fetchApi(endpoint) {
-        const separator = endpoint.includes("?") ? "&" : "?";
-        const url = `${BASE_URL}${endpoint}${separator}token=${TOKEN}`;
-        
+    function safeParse(data) {
+        if (!data) return null;
+        if (typeof data === "object") return data;
         try {
-            const res = await http_get(url, HEADERS);
-            if (!res || !res.body) return {};
-            return JSON.parse(res.body);
+            return JSON.parse(data);
         } catch (e) {
-            console.error("API Fetch Error: ", e.message);
-            return {};
+            return null;
         }
     }
 
     function qualityFromText(text) {
-        const value = String(text || "").toLowerCase();
-        if (/2160p|4k|uhd/.test(value)) return 2160;
-        if (/1440p|2k/.test(value)) return 1440;
-        if (/1080p|fhd/.test(value)) return 1080;
-        if (/720p|hd/.test(value)) return 720;
-        if (/480p|sd/.test(value)) return 480;
-        if (/360p/.test(value)) return 360;
-        return 0; // Unknown or Default
+        const val = String(text || "").toLowerCase();
+        if (/2160|4k/i.test(val)) return 2160;
+        if (/1440|2k/i.test(val)) return 1440;
+        if (/1080|fhd/i.test(val)) return 1080;
+        if (/720|hd/i.test(val)) return 720;
+        if (/480|sd/i.test(val)) return 480;
+        if (/360/i.test(val)) return 360;
+        return 1080;
     }
 
-    // --- Core Functions ---
+    function toMultimediaItem(meta) {
+        if (!meta) return null;
+        const payloadData = {
+            id: meta.id,
+            type: meta.type || "movie",
+            poster: meta.poster || ""
+        };
+        return new MultimediaItem({
+            title: meta.name || "Untitled",
+            url: JSON.stringify(payloadData),
+            posterUrl: meta.poster || "",
+            type: meta.type === "movie" ? "movie" : "series",
+            year: meta.releaseInfo ? parseInt(meta.releaseInfo, 10) : undefined,
+            description: meta.description || ""
+        });
+    }
+
     async function getHome(cb) {
         try {
-            // Fetch manifest to discover available content automatically
-            const manifest = await fetchApi("/manifest.json");
-            const catalogs = manifest.catalogs || [];
-            
-            const data = {};
-            
-            for (const cat of catalogs) {
-                const catName = (cat.name || "").toLowerCase();
-                const catId = (cat.id || "").toLowerCase();
-                
-                // REQUIREMENT: Remove "Continue Watching"
-                if (catName.includes("continue") || catId.includes("continue")) {
-                    continue;
-                }
-                
-                // Fetch catalog items
-                const res = await fetchApi(`/catalog/${cat.type}/${cat.id}.json`);
-                if (res && res.metas && res.metas.length > 0) {
-                    
-                    let displayName = cat.name || cat.id;
-                    
-                    // REQUIREMENT: Map to specific Home Page Categories
-                    if (catName.includes("trending")) {
-                        displayName = "Trending Now";
-                    } else if (catName.includes("popular") && cat.type === "movie") {
-                        displayName = "Popular Movies";
-                    } else if (catName.includes("popular") && cat.type === "series") {
-                        displayName = "Popular Shows";
+            let movieCatalogId = "kartoons_movies";
+            let seriesCatalogId = "kartoons_series";
+            let trendingCatalogId = "kartoons_movies";
+
+            try {
+                const manifestRes = await http_get(MANIFEST_URL, HEADERS);
+                const manifest = safeParse(manifestRes.body);
+                if (manifest && manifest.catalogs) {
+                    const catalogs = manifest.catalogs;
+                    const movieCats = catalogs.filter(c => c.type === "movie");
+                    const seriesCats = catalogs.filter(c => c.type === "series");
+
+                    if (movieCats.length > 0) {
+                        movieCatalogId = movieCats[0].id;
+                        trendingCatalogId = movieCats[0].id;
                     }
-                    
-                    data[displayName] = res.metas.map(m => new MultimediaItem({
-                        title: m.name || "Unknown",
-                        url: JSON.stringify({ id: m.id, type: m.type, name: m.name, poster: m.poster }),
-                        posterUrl: m.poster || "",
-                        type: m.type === "series" ? "series" : "movie",
-                        description: m.description || ""
-                    }));
+                    if (seriesCats.length > 0) {
+                        seriesCatalogId = seriesCats[0].id;
+                    }
+                    const trendingCat = catalogs.find(c => /trending|featured/i.test(c.name || c.id));
+                    if (trendingCat) {
+                        trendingCatalogId = trendingCat.id;
+                    }
                 }
+            } catch (err) {
+                console.error("Manifest parse error, using default catalogs: " + err.message);
             }
-            
-            if (Object.keys(data).length === 0) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No catalogs found." });
+
+            const trendingUrl = `${BASE_API_URL}/catalog/movie/${trendingCatalogId}.json?token=${TOKEN}`;
+            const moviesUrl = `${BASE_API_URL}/catalog/movie/${movieCatalogId}.json?token=${TOKEN}`;
+            const seriesUrl = `${BASE_API_URL}/catalog/series/${seriesCatalogId}.json?token=${TOKEN}`;
+
+            const [trendingRes, moviesRes, seriesRes] = await Promise.all([
+                http_get(trendingUrl, HEADERS),
+                http_get(moviesUrl, HEADERS),
+                http_get(seriesUrl, HEADERS)
+            ]);
+
+            const homeData = {};
+
+            if (trendingRes && trendingRes.body) {
+                const metas = safeParse(trendingRes.body)?.metas || [];
+                const items = metas.map(toMultimediaItem).filter(Boolean);
+                if (items.length > 0) homeData["Trending Now"] = items;
             }
-            
-            cb({ success: true, data });
+
+            if (moviesRes && moviesRes.body) {
+                const metas = safeParse(moviesRes.body)?.metas || [];
+                const items = metas.map(toMultimediaItem).filter(Boolean);
+                if (items.length > 0) homeData["Popular Movies"] = items;
+            }
+
+            if (seriesRes && seriesRes.body) {
+                const metas = safeParse(seriesRes.body)?.metas || [];
+                const items = metas.map(toMultimediaItem).filter(Boolean);
+                if (items.length > 0) homeData["Popular Shows"] = items;
+            }
+
+            cb({ success: true, data: homeData });
         } catch (e) {
             cb({ success: false, errorCode: "HOME_ERROR", message: e.message || String(e) });
         }
@@ -87,23 +114,32 @@
 
     async function search(query, cb) {
         try {
-            // Search simultaneously in movies and series (Standard Stremio behavior)
+            const queryEscaped = encodeURIComponent(query);
+            const searchMovieUrl = `${BASE_API_URL}/catalog/movie/kartoons_movies/search=${queryEscaped}.json?token=${TOKEN}`;
+            const searchSeriesUrl = `${BASE_API_URL}/catalog/series/kartoons_series/search=${queryEscaped}.json?token=${TOKEN}`;
+
             const [movieRes, seriesRes] = await Promise.all([
-                fetchApi(`/catalog/movie/search/search=${encodeURIComponent(query)}.json`),
-                fetchApi(`/catalog/series/search/search=${encodeURIComponent(query)}.json`)
+                http_get(searchMovieUrl, HEADERS),
+                http_get(searchSeriesUrl, HEADERS)
             ]);
-            
-            const metas = [...(movieRes.metas || []), ...(seriesRes.metas || [])];
-            
-            const items = metas.map(m => new MultimediaItem({
-                title: m.name || "Unknown",
-                url: JSON.stringify({ id: m.id, type: m.type, name: m.name, poster: m.poster }),
-                posterUrl: m.poster || "",
-                type: m.type === "series" ? "series" : "movie",
-                description: m.description || ""
-            }));
-            
-            cb({ success: true, data: items });
+
+            const results = [];
+            if (movieRes && movieRes.body) {
+                const metas = safeParse(movieRes.body)?.metas || [];
+                metas.forEach(meta => {
+                    const item = toMultimediaItem(meta);
+                    if (item) results.push(item);
+                });
+            }
+            if (seriesRes && seriesRes.body) {
+                const metas = safeParse(seriesRes.body)?.metas || [];
+                metas.forEach(meta => {
+                    const item = toMultimediaItem(meta);
+                    if (item) results.push(item);
+                });
+            }
+
+            cb({ success: true, data: results });
         } catch (e) {
             cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message || String(e) });
         }
@@ -111,107 +147,110 @@
 
     async function load(urlStr, cb) {
         try {
-            const payload = JSON.parse(urlStr);
-            const { id, type, name, poster } = payload;
-            
-            // Try to load metadata from the addon provider
-            let meta;
-            try {
-                const res = await fetchApi(`/meta/${type}/${id}.json`);
-                meta = res.meta;
-            } catch (e) {
-                meta = null; // Failsafe fallback logic handled below
-            }
-            
-            // If the provider doesn't support full /meta endpoint, build a dummy payload with 1 single playable stream
-            if (!meta) {
-                const isSeries = type === "series";
-                const fallbackData = new MultimediaItem({
-                    title: name || "Unknown Title",
-                    url: urlStr,
-                    posterUrl: poster || "",
-                    type: isSeries ? "series" : "movie",
-                    episodes: [
-                        new Episode({
-                            name: name || "Play Media",
-                            url: JSON.stringify({ id: id, type: type }),
-                            posterUrl: poster || ""
-                        })
-                    ]
-                });
-                return cb({ success: true, data: fallbackData });
-            }
-            
-            // Parse videos/episodes if it's a series
+            const media = safeParse(urlStr);
+            if (!media || !media.id) throw new Error("Invalid payload data");
+
+            const type = media.type || "movie";
+            const id = media.id;
+            const metaUrl = `${BASE_API_URL}/meta/${type}/${id}.json?token=${TOKEN}`;
+
+            const res = await http_get(metaUrl, HEADERS);
+            const meta = safeParse(res.body)?.meta;
+
+            if (!meta) throw new Error("Metadata request returned empty payload");
+
+            const title = meta.name || "Untitled";
+            const poster = meta.poster || media.poster || "";
+            const banner = meta.background || "";
+            const description = meta.description || "";
+            const year = meta.releaseInfo ? parseInt(meta.releaseInfo, 10) : undefined;
+            const genres = meta.genres || [];
+
             let episodes = [];
-            if (meta.videos && meta.videos.length > 0) {
-                episodes = meta.videos.map(v => new Episode({
-                    name: v.name || v.title || `Episode ${v.episode || 1}`,
-                    url: JSON.stringify({ id: v.id, type: type }), // v.id contains standard format e.g tt123456:1:2
-                    season: v.season || 1,
-                    episode: v.episode || 1,
-                    posterUrl: v.thumbnail || meta.poster || poster || "",
-                    description: v.overview || v.description || ""
-                }));
-            } else if (type === "movie" || type === "anime") {
+            if (type === "series") {
+                episodes = (meta.videos || []).map((video) => {
+                    const epPayload = {
+                        id: id,
+                        type: "series",
+                        videoId: video.id
+                    };
+                    return new Episode({
+                        name: video.title || `Episode ${video.episode}`,
+                        url: JSON.stringify(epPayload),
+                        posterUrl: video.thumbnail || poster,
+                        season: video.season || 1,
+                        episode: video.episode || 1
+                    });
+                });
+            } else {
+                const moviePayload = { id: id, type: "movie" };
                 episodes = [new Episode({
-                    name: meta.name || name || "Movie Stream",
-                    url: JSON.stringify({ id: meta.id, type: type }), 
-                    posterUrl: meta.poster || poster || ""
+                    name: title,
+                    url: JSON.stringify(moviePayload),
+                    posterUrl: poster
                 })];
             }
 
-            const resultData = new MultimediaItem({
-                title: meta.name || name,
-                url: urlStr,
-                posterUrl: meta.poster || poster || "",
-                bannerUrl: meta.background || "",
-                type: type === "series" ? "series" : "movie",
-                description: meta.description || "",
-                year: meta.year || (meta.releaseInfo ? parseInt(meta.releaseInfo, 10) : undefined),
-                genres: meta.genres || [],
-                episodes: episodes
+            cb({
+                success: true,
+                data: new MultimediaItem({
+                    title,
+                    url: urlStr,
+                    posterUrl: poster,
+                    bannerUrl: banner,
+                    description,
+                    type,
+                    year,
+                    genres,
+                    episodes
+                })
             });
-
-            cb({ success: true, data: resultData });
         } catch (e) {
             cb({ success: false, errorCode: "LOAD_ERROR", message: e.message || String(e) });
         }
     }
 
-    async function loadStreams(urlStr, cb) {
+    async function loadStreams(urlInfo, cb) {
         try {
-            const { id, type } = JSON.parse(urlStr);
-            
-            // Fetch streams from API mapping to the exact Video ID
-            const res = await fetchApi(`/stream/${type}/${id}.json`);
-            const streams = res.streams || [];
-            
-            const streamResults = [];
-            
-            for (const s of streams) {
-                // Ensure there is a URL available (Stremio occasionally sends infoHashes or externalUrls)
-                if (!s.url) continue;
+            const media = safeParse(urlInfo);
+            if (!media || !media.id) throw new Error("Invalid payload data");
 
-                // Identify stream source & quality tags based on strings
-                const streamNameStr = String(s.name || s.title || "Kartoons Server");
-                const parsedQuality = qualityFromText(s.title) || qualityFromText(s.name) || 0;
-                
-                streamResults.push(new StreamResult({
-                    url: s.url,
-                    source: streamNameStr.replace(/\n/g, ' ').trim(),
-                    quality: parsedQuality,
-                    headers: s.behaviorHints?.headers || {} 
-                }));
+            const type = media.type || "movie";
+            const reqId = media.videoId || media.id;
+            const streamUrl = `${BASE_API_URL}/stream/${type}/${reqId}.json?token=${TOKEN}`;
+
+            const res = await http_get(streamUrl, HEADERS);
+            const streamsObj = safeParse(res.body);
+            const streamResults = [];
+
+            if (streamsObj && streamsObj.streams) {
+                for (const stream of streamsObj.streams) {
+                    let directUrl = stream.url;
+                    if (!directUrl && stream.externalUrl) {
+                        directUrl = stream.externalUrl;
+                    }
+                    if (!directUrl) continue;
+
+                    const sourceName = stream.name || "Kartoons";
+                    const subtitleText = stream.title || "";
+                    const label = subtitleText ? `${sourceName} - ${subtitleText.split('\n')[0]}` : sourceName;
+                    const quality = qualityFromText(subtitleText) || qualityFromText(sourceName);
+
+                    streamResults.push(new StreamResult({
+                        url: directUrl,
+                        source: label,
+                        quality: quality,
+                        headers: HEADERS
+                    }));
+                }
             }
-            
+
             cb({ success: true, data: streamResults });
         } catch (e) {
             cb({ success: false, errorCode: "STREAM_ERROR", message: e.message || String(e) });
         }
     }
 
-    // --- Export API ---
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
