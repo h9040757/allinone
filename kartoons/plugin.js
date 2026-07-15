@@ -10,6 +10,15 @@
     };
 
     // --- Utilities & Serialization ---
+    function cleanTitle(rawTitle) {
+        if (!rawTitle) return "Untitled Content";
+        // Strips common automated system prefixing brands like "Kartoons - " or suffixing brand noise
+        return String(rawTitle)
+            .replace(/^kartoons\s*[-|:]\s*/i, "")
+            .replace(/\s*[-|:]\s*kartoons$/i, "")
+            .trim();
+    }
+
     function safeParse(data) {
         if (!data) return null;
         if (typeof data === "object") return data;
@@ -46,7 +55,7 @@
         else if (meta.type === "anime") type = "anime";
 
         return new MultimediaItem({
-            title: meta.name || "Untitled Content",
+            title: cleanTitle(meta.name),
             url: payload(meta.id, meta.type || "series", meta.poster),
             posterUrl: meta.poster || "",
             bannerUrl: meta.background || "",
@@ -84,17 +93,14 @@
             const categories = [
                 { path: "/category/Trending Now/", name: "Trending Now", type: "anime" },
                 { path: "/category/Popular Movies/", name: "Popular Movies", type: "anime" },
-                { path: "/category/Popular Shows/", name: "Popular Shows", type: "anime" },
+                { path: "/category/Popular Shows/", name: "Popular Shows", type: "anime" }
             ];
 
             const homeSections = await mapLimit(categories, 3, async (cat) => {
-                // Sanitize path parameter to build a correct Stremio protocol URL lookup
-                // Stremio endpoints typically use catalog/{type}/{id}.json format. 
-                // We extract the base segment matching your structure.
-                let catalogId = cat.path.replace(/^\/category\//, "").replace(/\/$/, "");
-                catalogId = encodeURIComponent(catalogId);
-                
-                const catalogUrl = `${API_BASE_URL}/catalog/${cat.type}/${catalogId}.json?token=${TOKEN}`;
+                // Formatting custom structural paths directly to fetch API targeting components
+                // Converts /category/Name/ -> catalog/anime/Name.json
+                const normalizedPath = cat.path.replace(/^\/category\//, "").replace(/\/$/, "");
+                const catalogUrl = `${API_BASE_URL}/catalog/${cat.type}/${encodeURIComponent(normalizedPath)}.json?token=${TOKEN}`;
                 
                 try {
                     const catalogData = await fetchJson(catalogUrl);
@@ -103,7 +109,7 @@
                     
                     return { name: cat.name, items: mappedItems };
                 } catch (err) {
-                    console.error("Error reading home section index: " + cat.name, err);
+                    console.error("Error fetching path location context: " + cat.path, err);
                     return null;
                 }
             });
@@ -123,8 +129,8 @@
 
     async function search(query, cb) {
         try {
-            // Default search requests against the primary index profile parameters
-            const searchUrl = `${API_BASE_URL}/catalog/anime/Trending%20Now/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
+            // Re-route fallbacks straight into primary structural targets using custom escaping blocks
+            const searchUrl = `${API_BASE_URL}/catalog/anime/Trending Now/search=${encodeURIComponent(query)}.json?token=${TOKEN}`;
             
             const searchData = await fetchJson(searchUrl);
             const rawMetas = searchData.metas || [];
@@ -150,7 +156,7 @@
             else if (meta.type === "anime") itemType = "anime";
 
             const resultItem = new MultimediaItem({
-                title: meta.name || "Untitled",
+                title: cleanTitle(meta.name),
                 url: payload(meta.id, meta.type, meta.poster),
                 posterUrl: meta.poster || metaInput.poster || "",
                 bannerUrl: meta.background || "",
@@ -163,7 +169,7 @@
 
             if (meta.type === "movie") {
                 resultItem.episodes = [new Episode({
-                    name: meta.name || "Play Video",
+                    name: cleanTitle(meta.name),
                     url: JSON.stringify({ id: meta.id, type: "movie", videoId: meta.id }),
                     season: 1,
                     episode: 1
@@ -187,7 +193,7 @@
                 });
             } else {
                 resultItem.episodes = [new Episode({
-                    name: meta.name || "Default Episode Stream",
+                    name: cleanTitle(meta.name),
                     url: JSON.stringify({ id: meta.id, type: meta.type, videoId: meta.id }),
                     season: 1,
                     episode: 1
