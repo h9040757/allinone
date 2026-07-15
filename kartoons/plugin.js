@@ -1,5 +1,6 @@
 (function () {
-    const BASE_URL = "https://api.kartoons.me/api/stremio";
+    // Dynamically resolve base URL injected by SkyStream or fall back to default API
+    const BASE_URL = (typeof manifest !== "undefined" && manifest.baseUrl) || "https://api.kartoons.me/api/stremio";
     const TOKEN = "1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
     const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
     
@@ -8,13 +9,13 @@
         "Accept": "application/json"
     };
 
-    // Default fallback catalogs if manifest parsing is unavailable
+    // Default fallback catalogs if dynamic manifest fetching is offline
     const DEFAULT_CATALOGS = [
         { type: "series", id: "kartoons_series", name: "Kartoons Series" },
         { type: "movie", id: "kartoons_movies", name: "Kartoons Movies" }
     ];
 
-    // --- Helper Functions ---
+    // --- Utility Parsers ---
     
     function safeParse(data) {
         if (!data) return null;
@@ -33,7 +34,7 @@
             const res = await http_get(targetUrl, HEADERS);
             return safeParse(res && res.body ? res.body : null);
         } catch (e) {
-            console.error("HTTP GET Error on: " + url, e.message);
+            console.error("HTTP GET Error on: " + url, e.message || String(e));
             return null;
         }
     }
@@ -51,7 +52,7 @@
         if (/1080/i.test(textToAnalyze)) return 1080;
         if (/720/i.test(textToAnalyze)) return 720;
         if (/480/i.test(textToAnalyze)) return 480;
-        return 720; // safe default fallback
+        return 720;
     }
 
     function mapStremioItem(item, fallbackType) {
@@ -67,16 +68,16 @@
         });
     }
 
-    // --- Core Functions ---
+    // --- Handler Interfaces ---
 
     async function getHome(cb) {
         try {
             let catalogsToLoad = DEFAULT_CATALOGS;
 
-            // Fetch manifest to resolve catalogs dynamically
-            const manifest = await getJson(`${BASE_URL}/manifest.json`);
-            if (manifest && Array.isArray(manifest.catalogs)) {
-                catalogsToLoad = manifest.catalogs.map(cat => ({
+            // Renamed locally to 'stremioManifest' to avoid collisions with SkyStream's global constant 'manifest'
+            const stremioManifest = await getJson(`${BASE_URL}/manifest.json`);
+            if (stremioManifest && Array.isArray(stremioManifest.catalogs)) {
+                catalogsToLoad = stremioManifest.catalogs.map(cat => ({
                     type: cat.type,
                     id: cat.id,
                     name: cat.name || `${cat.type.toUpperCase()} Catalog`
@@ -85,7 +86,6 @@
 
             const homeData = {};
             
-            // Fetch catalog items in parallel
             await Promise.all(catalogsToLoad.map(async (catalog) => {
                 const url = `${BASE_URL}/catalog/${catalog.type}/${catalog.id}.json`;
                 const data = await getJson(url);
@@ -99,7 +99,11 @@
             }));
 
             if (Object.keys(homeData).length === 0) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No catalogs loaded" });
+                return cb({ 
+                    success: false, 
+                    errorCode: "HOME_ERROR", 
+                    message: "No catalogs loaded. If this error persists, you may need to utilize a VPN to resolve network-level blocks targeting Kartoons.me." 
+                });
             }
 
             cb({ success: true, data: homeData });
@@ -110,7 +114,6 @@
 
     async function search(query, cb) {
         try {
-            // Searches are routed to default standard catalogs
             const searchPromises = DEFAULT_CATALOGS.map(async (catalog) => {
                 const encodedQuery = encodeURIComponent(query);
                 const url = `${BASE_URL}/catalog/${catalog.type}/${catalog.id}/search=${encodedQuery}.json`;
@@ -141,7 +144,7 @@
             const meta = response && response.meta ? response.meta : null;
 
             if (!meta) {
-                throw new Error("Failed to load metadata");
+                throw new Error("Failed to load metadata. This may indicate a connection restriction or API block.");
             }
 
             const title = meta.name || "Unknown";
@@ -166,7 +169,6 @@
                     });
                 }
             } else {
-                // Movie type uses a single-episode representation to initiate stream resolution
                 episodes = [
                     new Episode({
                         name: title,
@@ -229,7 +231,7 @@
         }
     }
 
-    // --- Module Exports ---
+    // --- Exposing Global Callbacks ---
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
