@@ -2,6 +2,7 @@
     // --- Configuration ---
     const BASE_URL = "https://api.kartoons.me/api/stremio";
     const TOKEN = "1KU9SIVqjWVcBW7YKcXj6jHYBAc7aCbD6ySMQSc0MHQ";
+    const EXCLUDED_KEYWORDS = ["continue", "watching", "history", "library", "recent"];
 
     let cachedManifest = null;
 
@@ -35,6 +36,25 @@
         return { catalogs: [] };
     }
 
+    function shouldIncludeCatalog(cat) {
+        const id = String(cat.id || "").toLowerCase();
+        const name = String(cat.name || "").toLowerCase();
+        for (const word of EXCLUDED_KEYWORDS) {
+            if (id.includes(word) || name.includes(word)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function formatCatalogName(name) {
+        const lower = name.toLowerCase().trim();
+        if (lower === "trending" || lower === "trending now" || lower === "trending_now") return "Trending Now";
+        if (lower === "popular movies" || lower === "popular_movies") return "Popular Movies";
+        if (lower === "popular shows" || lower === "popular_shows" || lower === "popular tv" || lower === "popular_tv") return "Popular Shows";
+        return name;
+    }
+
     function parseQuality(nameStr, titleStr) {
         const text = String(nameStr + " " + titleStr).toLowerCase();
         if (text.includes("2160") || text.includes("4k")) return 2160;
@@ -49,45 +69,23 @@
     async function getHome(cb) {
         try {
             const manifest = await getManifest();
-            const catalogs = manifest.catalogs || [];
+            // Filter out continue watching / history sections
+            const catalogs = (manifest.catalogs || []).filter(shouldIncludeCatalog);
             const homeData = {};
 
-            for (let i = 0; i < catalogs.length; i++) {
-                const cat = catalogs[i];
-                if (!cat.id || !cat.type) continue;
+            // Fetch up to 8 valid home catalogs in parallel
+            const targetCatalogs = catalogs.slice(0, 8);
 
-                const lowerId = String(cat.id).toLowerCase();
-                const lowerName = String(cat.name || "").toLowerCase();
-
-                // 1. Remove "Continue Watching" or temporary tracking sections
-                if (
-                    lowerId.includes("continue") || lowerName.includes("continue") || 
-                    lowerId.includes("watching") || lowerName.includes("watching") ||
-                    lowerId.includes("recent") || lowerName.includes("recent") ||
-                    lowerId.includes("history") || lowerName.includes("history")
-                ) {
-                    continue; 
-                }
-
-                // 2. Map and rename sections matching requested categories
-                let catName = cat.name || cat.type;
-                if (lowerId.includes("trending") || lowerName.includes("trending")) {
-                    catName = "Trending Now";
-                } else if (cat.type === "movie" && (lowerId.includes("popular") || lowerName.includes("popular"))) {
-                    catName = "Popular Movies";
-                } else if (cat.type === "series" && (lowerId.includes("popular") || lowerName.includes("popular"))) {
-                    catName = "Popular Shows";
-                }
-
+            const promises = targetCatalogs.map(async (cat) => {
+                const catName = formatCatalogName(cat.name || cat.type);
                 const path = `/catalog/${cat.type}/${cat.id}.json`;
-                
                 try {
                     const res = await http_get(buildUrl(path));
                     const data = safeParse(res.body);
                     const metas = data && data.metas ? data.metas : [];
 
                     if (metas.length > 0) {
-                        homeData[catName] = metas.map((m) => new MultimediaItem({
+                        const items = metas.map((m) => new MultimediaItem({
                             title: m.name,
                             url: JSON.stringify({ type: m.type || cat.type, id: m.id }),
                             posterUrl: m.poster,
@@ -95,9 +93,18 @@
                             description: m.description,
                             year: m.releaseInfo ? parseInt(m.releaseInfo) : undefined
                         }));
+                        return { name: catName, items };
                     }
                 } catch (err) {
                     console.error(`Error loading catalog ${catName}:`, err);
+                }
+                return null;
+            });
+
+            const results = await Promise.all(promises);
+            for (const res of results) {
+                if (res && res.items && res.items.length > 0) {
+                    homeData[res.name] = res.items;
                 }
             }
 
@@ -114,7 +121,7 @@
     async function search(query, cb) {
         try {
             const manifest = await getManifest();
-            const catalogs = manifest.catalogs || [];
+            const catalogs = (manifest.catalogs || []).filter(shouldIncludeCatalog);
             
             let searchCatalogs = catalogs.filter(c => c.extraSupported && c.extraSupported.includes("search"));
             
