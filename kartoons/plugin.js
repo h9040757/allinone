@@ -44,6 +44,35 @@
         return undefined;
     }
 
+    // Identifies and renames Stremio catalogs to match requested home sections
+    function getSectionName(catalog) {
+        const id = String(catalog.id || "").toLowerCase();
+        const name = String(catalog.name || "").toLowerCase();
+        const type = String(catalog.type || "").toLowerCase();
+
+        if (id.includes("trending") || name.includes("trending") || id.includes("trend") || name.includes("trend")) {
+            return "Trending Now";
+        }
+        
+        if (id.includes("popular") || name.includes("popular")) {
+            if (type === "movie") return "Popular Movies";
+            if (type === "series" || type === "tv" || type === "show") return "Popular Shows";
+            return "Popular";
+        }
+
+        if (type === "movie") {
+            if (name.includes("kartoons") || id.includes("kartoons")) return "Kartoons Movies";
+            return "Movies";
+        }
+
+        if (type === "series" || type === "tv" || type === "show") {
+            if (name.includes("kartoons") || id.includes("kartoons")) return "Kartoons Shows";
+            return "Shows";
+        }
+
+        return catalog.name || (type.charAt(0).toUpperCase() + type.slice(1));
+    }
+
     // --- Core Methods ---
 
     async function getHome(cb) {
@@ -52,14 +81,11 @@
             const catalogs = manifest.catalogs || [];
             const homeData = {};
 
-            // Fetch the first 5 catalogs to avoid heavy loading times on Home
-            const targetCatalogs = catalogs.slice(0, 5);
-
-            for (let i = 0; i < targetCatalogs.length; i++) {
-                const cat = targetCatalogs[i];
-                if (!cat.id || !cat.type) continue;
-
-                const catName = cat.name || cat.type;
+            // Fetch and map catalog items concurrently
+            const promises = catalogs.map(async (cat) => {
+                if (!cat.id || !cat.type) return null;
+                
+                const sectionName = getSectionName(cat);
                 const path = `/catalog/${cat.type}/${cat.id}.json`;
                 
                 try {
@@ -68,7 +94,7 @@
                     const metas = data && data.metas ? data.metas : [];
 
                     if (metas.length > 0) {
-                        homeData[catName] = metas.map((m) => new MultimediaItem({
+                        const items = metas.map((m) => new MultimediaItem({
                             title: m.name,
                             url: JSON.stringify({ type: m.type || cat.type, id: m.id }),
                             posterUrl: m.poster,
@@ -76,17 +102,52 @@
                             description: m.description,
                             year: m.releaseInfo ? parseInt(m.releaseInfo) : undefined
                         }));
+                        return { name: sectionName, items: items };
                     }
                 } catch (err) {
-                    console.error(`Error loading catalog ${catName}:`, err);
+                    console.error(`Error loading catalog ${sectionName}:`, err);
+                }
+                return null;
+            });
+
+            const results = await Promise.all(promises);
+
+            // Group loaded items
+            results.forEach((res) => {
+                if (res && res.items.length > 0) {
+                    homeData[res.name] = res.items;
+                }
+            });
+
+            // Set custom display priority order for UI presentation
+            const orderedHomeData = {};
+            const preferredOrder = [
+                "Trending Now",
+                "Popular Movies",
+                "Popular Shows",
+                "Kartoons Movies",
+                "Kartoons Shows"
+            ];
+
+            // 1. Add preferred ordered sections
+            for (const key of preferredOrder) {
+                if (homeData[key]) {
+                    orderedHomeData[key] = homeData[key];
                 }
             }
 
-            if (Object.keys(homeData).length === 0) {
-                return cb({ success: false, errorCode: "HOME_ERROR", message: "No data found on home." });
+            // 2. Add remaining catalogs if present
+            for (const key of Object.keys(homeData)) {
+                if (!orderedHomeData[key]) {
+                    orderedHomeData[key] = homeData[key];
+                }
             }
 
-            cb({ success: true, data: homeData });
+            if (Object.keys(orderedHomeData).length === 0) {
+                return cb({ success: false, errorCode: "HOME_ERROR", message: "No sections could be loaded." });
+            }
+
+            cb({ success: true, data: orderedHomeData });
         } catch (e) {
             cb({ success: false, errorCode: "HOME_ERROR", message: e.message || String(e) });
         }
@@ -97,10 +158,8 @@
             const manifest = await getManifest();
             const catalogs = manifest.catalogs || [];
             
-            // Find catalogs that explicitly support "search"
             let searchCatalogs = catalogs.filter(c => c.extraSupported && c.extraSupported.includes("search"));
             
-            // Fallback: Just search against the first available generic movie/series catalog if no flags are provided
             if (searchCatalogs.length === 0 && catalogs.length > 0) {
                 searchCatalogs = catalogs.slice(0, 2); 
             }
@@ -126,11 +185,10 @@
                     }));
                     allResults = allResults.concat(mapped);
                 } catch (err) {
-                    console.error("Search failed for catalog:", err);
+                    console.error("Search query execution failed:", err);
                 }
             }
 
-            // Deduplicate search results based on Stremio ID
             const uniqueResults = [];
             const seen = new Set();
             for (const item of allResults) {
@@ -150,7 +208,7 @@
         try {
             const payload = safeParse(urlStr);
             if (!payload || !payload.id || !payload.type) {
-                throw new Error("Invalid request payload.");
+                throw new Error("Invalid parameters passed.");
             }
 
             const path = `/meta/${payload.type}/${payload.id}.json`;
@@ -158,15 +216,13 @@
             const data = safeParse(res.body);
             const meta = data && data.meta ? data.meta : null;
 
-            if (!meta) throw new Error("Metadata not found.");
+            if (!meta) throw new Error("Metadata request returned empty.");
 
             let episodes = [];
             
-            // Map Stremio Videos array to Skystream Episodes
             if (meta.videos && meta.videos.length > 0) {
                 episodes = meta.videos.map((v) => new Episode({
                     name: v.title || v.name || `Episode ${v.episode}`,
-                    // Embed Stremio's Video ID into payload to resolve Stream endpoint later
                     url: JSON.stringify({ type: payload.type, id: v.id }),
                     season: v.season || 1,
                     episode: v.episode,
@@ -174,7 +230,6 @@
                     description: v.overview || v.description
                 }));
             } else {
-                // Standalone media (Movie or Single File)
                 episodes = [new Episode({
                     name: meta.name || "Movie",
                     url: JSON.stringify({ type: payload.type, id: payload.id }),
@@ -208,10 +263,9 @@
         try {
             const payload = safeParse(urlStr);
             if (!payload || !payload.id || !payload.type) {
-                throw new Error("Invalid request payload for streams.");
+                throw new Error("Parameters missing for resolving stream.");
             }
 
-            // Target the streams Stremio endpoint
             const path = `/stream/${payload.type}/${payload.id}.json`;
             const res = await http_get(buildUrl(path));
             const data = safeParse(res.body);
@@ -222,15 +276,12 @@
             for (const s of streams) {
                 let mediaUrl = s.url;
                 
-                // Sometimes Addons return youtube Ids instead of direct URL
                 if (!mediaUrl && s.ytId) {
                     mediaUrl = `https://www.youtube.com/watch?v=${s.ytId}`;
                 }
 
-                // If it isn't an HTTP based stream (like a generic torrent without http link), we skip it
                 if (!mediaUrl) continue;
 
-                // Format subtitle arrays for the stream mapping
                 let subtitles = [];
                 if (s.subtitles && Array.isArray(s.subtitles)) {
                     subtitles = s.subtitles.map(sub => ({
