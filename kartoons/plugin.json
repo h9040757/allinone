@@ -1,20 +1,18 @@
 {
   "packageName": "me.kartoons.skystream",
-  "name": "Kartoons",
-  "version": 2,
-  "baseUrl": "https://api.kartoons.me",
-  "description": "Cartoon",
+  "name": "Kartoons.me",
+  "version": 1,
+  "baseUrl": "https://kartoons.me",
+  "description": "cartoon",
   "authors": [
-    "Custom Builder"
+    "Community Developer"
   ],
   "languages": [
-    "hi",
-    "en"
- 
+    "en",
+    "hi"
   ],
   "categories": [
     "Cartoon",
-    "Anime",
     "Movie",
     "Series"
   ]
