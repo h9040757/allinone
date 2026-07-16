@@ -1,4 +1,4 @@
-(function() {
+(function () {
     "use strict";
 
     var BASE_URL = (typeof manifest !== "undefined" && manifest && manifest.baseUrl) || "https://anichi.to";
@@ -10,15 +10,6 @@
         "X-Requested-With": "XMLHttpRequest",
         "Referer": BASE_URL + "/home",
         "Cookie": "country_code=IN; prefered_server_type=sub"
-    };
-
-    var POST_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Content-Type": "application/json",
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": BASE_URL + "/",
-        "Origin": BASE_URL
     };
 
     function absUrl(path) {
@@ -78,7 +69,7 @@
 
     function parseCardsFromHtml(html) {
         var cards = [];
-        // Matches common card structures inside Zoro/HiAnime/Anichi clones
+        // Enhanced matching logic to capture item blocks alongside potential release meta
         var cardRegex = /<div\s+class="[^"]*flw-item[^"]*"[\s\S]*?<a\s+href="([^"]+)"\s+class="[^"]*film-poster-ahref[^"]*"[\s\S]*?<img\s+[^>]*(?:data-src|src)="([^"]+)"[\s\S]*?<a\s+[^>]*class="[^"]*dynamic-name[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
         var match;
         while ((match = cardRegex.exec(html)) !== null) {
@@ -91,7 +82,6 @@
         }
 
         if (cards.length === 0) {
-            // General fallback matching logic
             var fallbackRegex = /<a\s+href="(\/watch\/[^"]+)"[^>]*>[\s\S]*?<img\s+[^>]*(?:data-src|src)="([^"]+)"[\s\S]*?alt="([^"]+)"/gi;
             while ((match = fallbackRegex.exec(html)) !== null) {
                 cards.push(new MultimediaItem({
@@ -109,14 +99,12 @@
         try {
             var result = {};
 
-            // 1. Scrape Featured/Trending from Home Page
             var homeHtml = await httpGetText(BASE_URL + "/home");
             var trending = parseCardsFromHtml(homeHtml);
             if (trending.length) {
                 result["Trending"] = trending.slice(0, 24);
             }
 
-            // 2. Load "Recently Updated" from widget endpoint
             var updatedWidget = await httpGetJson(BASE_URL + "/ajax/home/widget/updated-all?page=1");
             if (updatedWidget && updatedWidget.html) {
                 var updatedItems = parseCardsFromHtml(updatedWidget.html);
@@ -147,7 +135,6 @@
         try {
             var html = await httpGetText(url);
             
-            // Extract Anichi's internal anime ID (used for retrieving AJAX episode lists)
             var idMatch = html.match(/data-id=["'](\d+)["']/i) || html.match(/id=["']watch-main["']\s+data-id=["'](\d+)["']/i);
             if (!idMatch) throw new Error("Anichi anime reference ID not found.");
             var animeId = idMatch[1];
@@ -162,7 +149,14 @@
             var descMatch = html.match(/<div\s+class="[^"]*text[^"]*">([\s\S]*?)<\/div>/i);
             var description = descMatch ? cleanHtml(descMatch[1]) : "";
 
-            // Retrieve episodes list from Anichi's API
+            // --- FIXED: Added Year Extraction Logic ---
+            var year = undefined;
+            var infoTextMatch = html.match(/<div\s+class="[^"]*anichi-info-block[^"]*">([\s\S]*?)<\/div>/i) || [null, html];
+            var yearMatch = infoTextMatch[1].match(/\b(19\d{2}|20\d{2})\b/);
+            if (yearMatch) {
+                year = parseInt(yearMatch[1], 10);
+            }
+
             var epJson = await httpGetJson(BASE_URL + "/ajax/v2/episode/list/" + animeId);
             var episodes = [];
 
@@ -199,6 +193,7 @@
                 posterUrl: poster,
                 type: guessType(title),
                 description: description,
+                year: year, // Passed structural parameter directly
                 headers: { "Referer": BASE_URL + "/" },
                 episodes: episodes
             });
@@ -245,25 +240,21 @@
 
             if (!episodeId) throw new Error("Missing active episode ID context.");
 
-            // Fetch list of available streaming servers from Anichi
             var serverListJson = await httpGetJson(BASE_URL + "/ajax/v2/episode/servers?episodeId=" + episodeId);
             var streams = [];
 
             if (serverListJson && serverListJson.html) {
-                // Parse server configurations (subbed/dubbed instances)
                 var serverRegex = /<div\s+[^>]*class="[^"]*server-item[^"]*"\s+data-id="(\d+)"\s+data-type="([^"]+)"[^>]*>([\s\S]*?)<\/div>/gi;
                 var match;
                 while ((match = serverRegex.exec(serverListJson.html)) !== null) {
                     var serverId = match[1];
-                    var type = match[2].toUpperCase(); // SUB or DUB
+                    var type = match[2].toUpperCase(); 
                     var serverName = cleanHtml(match[3]) || "Server";
 
-                    // Fetch sources info endpoint for specific server
                     var sourceJson = await httpGetJson(BASE_URL + "/ajax/v2/episode/sources?id=" + serverId);
                     if (sourceJson && sourceJson.link) {
                         var embedUrl = sourceJson.link;
 
-                        // Resolve Megaplay source integrations directly
                         if (/megaplay\.buzz/i.test(embedUrl)) {
                             var idMatch = embedUrl.match(/id=(\d+)/) || embedUrl.match(/\/s-\d+\/(\d+)/);
                             var mediaId = idMatch ? idMatch[1] : "";
@@ -292,7 +283,6 @@
                                 }
                             }
                         } else {
-                            // Standard stream entry fallback if redirecting to generic iframe
                             streams.push(new StreamResult({
                                 url: embedUrl,
                                 source: "Anichi [" + type + "] (" + serverName + ")",
