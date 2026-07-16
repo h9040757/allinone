@@ -1,19 +1,25 @@
 (function () {
+    // --- Configuration & Constants ---
     const MAIN_URL = "https://anichi.to";
     const MAPPER_BASE = "https://mapper.nekostream.site/api/mal/";
     const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
+    
+    // Configured matching headers derived from strict browser networking logs
     const HEADERS = {
         "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": MAIN_URL + "/"
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": MAIN_URL + "/home"
     };
 
-    const SOURCE_LABELS = {
-        gogoanime: "Vidstream",
-        anivibe: "Vibe-Stream",
-        animepahe: "Kiwi-Stream"
-    };
+    // Updated architectural categories containing structural target points
+    const HOME_SECTIONS = [
+        { path: "ajax/home/widget/updated-all?page=1", name: "Recently Updated (All)", type: "anime", isAjax: true },
+        { path: "trending", name: "Trending Anime", type: "anime", isAjax: false },
+        { path: "movie", name: "Anime Movies", type: "movie", isAjax: false }
+    ];
 
+    // --- Utility Methods ---
     function text(value) {
         return (value == null ? "" : String(value)).replace(/\s+/g, " ").trim();
     }
@@ -55,7 +61,6 @@
         if (/2160p|4k/i.test(raw)) return 2160;
         if (/1080p|fhd/i.test(raw)) return 1080;
         if (/720p|hd/i.test(raw)) return 720;
-        if (/480p|sd/i.test(raw)) return 480;
         return 720;
     }
 
@@ -78,7 +83,7 @@
     function toMedia(element, fallbackType) {
         const link = qs(element, "a");
         const href = fixUrl(attr(link, ["href"]), MAIN_URL);
-        const title = text(qs(element, ".title, .name, h2, h3")?.textContent);
+        const title = text(qs(element, ".title, .name, .film-name, h2, h3")?.textContent);
         if (!title || !href) return null;
         
         const poster = fixUrl(attr(qs(element, "img"), ["data-src", "src"]), MAIN_URL);
@@ -96,18 +101,29 @@
         });
     }
 
+    // --- Core Hooks ---
+
     async function getHome(cb) {
         try {
-            const sections = await mapLimit([
-                { path: "trending", name: "Trending Anime", type: "anime" },
-                { path: "recent-sub", name: "Recently Updated (SUB)", type: "anime" },
-                { path: "recent-dub", name: "Recently Updated (DUB)", type: "anime" }
-            ], 3, async (section) => {
-                const res = await http_get(`${MAIN_URL}/${section.path}`, HEADERS);
+            const sections = await mapLimit(HOME_SECTIONS, 3, async (section) => {
+                const targetUrl = `${MAIN_URL}/${section.path}`;
+                const res = await http_get(targetUrl, HEADERS);
                 if (!res || !res.body) return null;
 
-                const doc = await parseHtml(res.body);
-                const cards = qsa(doc, ".ani-card, .item, article, .flw-item");
+                let HTMLContent = "";
+                if (section.isAjax) {
+                    const parsedJson = safeParse(res.body);
+                    // Extracting string elements returned by direct AJAX data blocks
+                    HTMLContent = parsedJson && parsedJson.html ? parsedJson.html : "";
+                } else {
+                    HTMLContent = res.body;
+                }
+
+                if (!HTMLContent) return null;
+
+                const doc = await parseHtml(HTMLContent);
+                // Scrapes against global structural selectors (flw-item is common inside AJAX loads)
+                const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .film-item");
                 const items = cards.map(c => toMedia(c, section.type)).filter(Boolean);
 
                 return { name: section.name, items };
@@ -126,11 +142,12 @@
 
     async function search(query, cb) {
         try {
-            const res = await http_get(`${MAIN_URL}/search?keyword=${encodeURIComponent(query)}`, HEADERS);
+            const targetUrl = `${MAIN_URL}/search?keyword=${encodeURIComponent(query)}`;
+            const res = await http_get(targetUrl, { ...HEADERS, "X-Requested-With": undefined });
             if (!res || !res.body) return cb({ success: true, data: [] });
 
             const doc = await parseHtml(res.body);
-            const cards = qsa(doc, ".ani-card, .item, article, .flw-item");
+            const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .film-item");
             const items = cards.map(c => toMedia(c, "anime")).filter(Boolean);
 
             cb({ success: true, data: items });
@@ -142,15 +159,15 @@
     async function load(urlStr, cb) {
         try {
             const metaInput = safeParse(urlStr);
-            if (!metaInput || !metaInput.url) throw new Error("Invalid parameters passed to load hook.");
+            if (!metaInput || !metaInput.url) throw new Error("Invalid structure data parameters.");
 
-            const res = await http_get(metaInput.url, HEADERS);
-            if (!res || !res.body) throw new Error("Failed to reach target info container.");
+            const res = await http_get(metaInput.url, { ...HEADERS, "X-Requested-With": undefined });
+            if (!res || !res.body) throw new Error("Failed to load root item data view container.");
 
             const doc = await parseHtml(res.body);
-            const title = text(qs(doc, "h1, .name")?.textContent) || "Unknown Anime";
-            const poster = fixUrl(attr(qs(doc, ".poster img, .ani-poster img"), ["src"]), metaInput.url);
-            const description = text(qs(doc, ".description, .overview")?.textContent);
+            const title = text(qs(doc, "h1, .name, .film-name")?.textContent) || "Unknown Anime";
+            const poster = fixUrl(attr(qs(doc, ".poster img, .ani-poster img, .film-poster img"), ["src"]), metaInput.url);
+            const description = text(qs(doc, ".description, .overview, .film-description")?.textContent);
 
             const result = new MultimediaItem({
                 title,
@@ -162,13 +179,16 @@
             });
 
             if (metaInput.type === "movie") {
-                result.episodes = [new Episode({ name: title, url: urlStr })];
+                result.episodes = [new Episode({
+                    name: title,
+                    url: urlStr
+                })];
             } else {
-                const epElements = qsa(doc, ".episodes-list a, .ep-item, #episodes a");
+                const epElements = qsa(doc, ".episodes-list a, .ep-item, #episodes a, .ss-list a");
                 if (epElements.length > 0) {
                     result.episodes = epElements.map((el, i) => {
                         const href = fixUrl(attr(el, ["href"]), metaInput.url);
-                        const epNum = parseInt(attr(el, ["data-number"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
+                        const epNum = parseInt(attr(el, ["data-number", "data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
                         return new Episode({
                             name: text(el.textContent) || `Episode ${epNum}`,
                             url: JSON.stringify({
@@ -181,7 +201,12 @@
                         });
                     });
                 } else {
-                    result.episodes = [new Episode({ name: "Episode 1", url: urlStr, season: 1, episode: 1 })];
+                    result.episodes = [new Episode({
+                        name: "Episode 1",
+                        url: urlStr,
+                        season: 1,
+                        episode: 1
+                    })];
                 }
             }
 
@@ -194,21 +219,20 @@
     async function loadStreams(urlInfo, cb) {
         try {
             const target = safeParse(urlInfo);
-            if (!target || !target.url) throw new Error("Null parameter verification occurred during stream load.");
+            if (!target || !target.url) throw new Error("Invalid stream verification structure.");
 
             const streams = [];
 
-            // Stage 1: Get standard iframe configurations found directly on the page
-            const htmlRes = await http_get(target.url, HEADERS);
+            const htmlRes = await http_get(target.url, { ...HEADERS, "X-Requested-With": undefined });
             if (htmlRes && htmlRes.body) {
                 const doc = await parseHtml(htmlRes.body);
-                const iframes = qsa(doc, "iframe, #player-iframe, .player iframe");
+                const iframes = qsa(doc, "iframe, #player-iframe, .player-iframe");
                 for (const iframe of iframes) {
                     const src = fixUrl(attr(iframe, ["src"]), target.url);
                     if (src && !src.includes("about:blank")) {
                         streams.push(new StreamResult({
                             url: src,
-                            source: "Player Direct Mirror",
+                            source: "Internal Player Mirror",
                             quality: 720,
                             headers: { "User-Agent": UA, "Referer": target.url }
                         }));
@@ -216,7 +240,6 @@
                 }
             }
 
-            // Stage 2: Fetch and merge dynamic external feeds compiled via the KuMapper API
             if (target.malId && target.slug && target.timestamp) {
                 const mapperUrl = `${MAPPER_BASE}${encodeURIComponent(target.malId)}/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.timestamp)}`;
                 try {
@@ -234,11 +257,11 @@
                                 if (!stream || !stream.url) return;
 
                                 const resolvedUrl = fixUrl(stream.url);
-                                const label = SOURCE_LABELS[sourceKey] || (sourceKey.charAt(0).toUpperCase() + sourceKey.slice(1));
+                                const sourceLabel = sourceKey.charAt(0).toUpperCase() + sourceKey.slice(1);
 
                                 streams.push(new StreamResult({
                                     url: resolvedUrl,
-                                    source: `KuMapper - ${label} [${bucket.toUpperCase()}]`,
+                                    source: `KuMapper (${sourceLabel} - ${bucket.toUpperCase()})`,
                                     quality: qualityFromText(resolvedUrl),
                                     headers: { "User-Agent": UA }
                                 }));
@@ -246,11 +269,10 @@
                         });
                     }
                 } catch (err) {
-                    console.error("[KuMapper API Query Failure]", err);
+                    console.error("[KuMapper Extraction Loop Interrupted]", err);
                 }
             }
 
-            // Deduplicate matching streams
             const seen = {};
             const finalStreams = streams.filter(s => {
                 const key = `${s.url}|${s.source}`;
@@ -265,6 +287,7 @@
         }
     }
 
+    // Export plugin definitions globally
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
