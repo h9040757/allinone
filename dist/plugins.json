@@ -1,24 +1,22 @@
 [
   {
-    "packageName": "me.kartoons.skystream",
-    "name": "Kartoons",
+    "packageName": "to.anichi.skystream.plugin",
+    "name": "Anichi",
     "version": 1,
-    "baseUrl": "https://api.kartoons.me",
-    "description": "Kartoons",
+    "baseUrl": "https://anichi.to",
+    "description": "Adapter plugin for Anichi with KuMapper stream group consolidation layer.",
     "authors": [
       "Developer"
     ],
     "languages": [
-      "en",
-      "hi"
+      "en"
     ],
     "categories": [
       "Anime",
-      "Cartoon",
-      "Movie",
+      "Movies",
       "Series"
     ],
-    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/me.kartoons.skystream.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/to.anichi.skystream.plugin.sky"
   },
   {
     "packageName": "me.kartoons.skystream",
