@@ -19,5 +19,26 @@
       "Series"
     ],
     "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/me.kartoons.skystream.sky"
+  },
+  {
+    "packageName": "me.kartoons.skystream",
+    "name": "Kartoons",
+    "version": 1,
+    "baseUrl": "https://api.kartoons.me",
+    "description": "Kartoons",
+    "authors": [
+      "Developer"
+    ],
+    "languages": [
+      "en",
+      "hi"
+    ],
+    "categories": [
+      "Anime",
+      "Cartoon",
+      "Movie",
+      "Series"
+    ],
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/me.kartoons.skystream.sky"
   }
 ]
