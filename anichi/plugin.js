@@ -6,14 +6,16 @@
     const HEADERS = {
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": MAIN_URL + "/"
+        "Referer": MAIN_URL + "/",
+        "X-Requested-With": "XMLHttpRequest"
     };
 
+    // We change the structural paths to query the dynamic AJAX widget layer directly
     const HOME_SECTIONS = [
-        { path: "trending", name: "Trending Anime", type: "anime" },
-        { path: "recent-sub", name: "Recently Updated (SUB)", type: "anime" },
-        { path: "recent-dub", name: "Recently Updated (DUB)", type: "anime" },
-        { path: "movie", name: "Anime Movies", type: "movie" }
+        { path: "ajax/home/widget/trending?page=1", name: "Trending Anime", type: "anime" },
+        { path: "ajax/home/widget/recent-sub?page=1", name: "Recently Updated (SUB)", type: "anime" },
+        { path: "ajax/home/widget/recent-dub?page=1", name: "Recently Updated (DUB)", type: "anime" },
+        { path: "ajax/home/widget/movie?page=1", name: "Anime Movies", type: "movie" }
     ];
 
     // --- Utility Methods ---
@@ -59,7 +61,7 @@
         if (/1080p|fhd/i.test(raw)) return 1080;
         if (/720p|hd/i.test(raw)) return 720;
         if (/480p|sd/i.test(raw)) return 480;
-        return 720; // safe default fallback
+        return 720;
     }
 
     async function mapLimit(items, limit, worker) {
@@ -81,13 +83,12 @@
     function toMedia(element, fallbackType) {
         const link = qs(element, "a");
         const href = fixUrl(attr(link, ["href"]), MAIN_URL);
-        const title = text(qs(element, ".title, .name, h2, h3")?.textContent);
+        const title = text(qs(element, ".title, .name, h2, h3, .film-name")?.textContent);
         if (!title || !href) return null;
         
         const poster = fixUrl(attr(qs(element, "img"), ["data-src", "src"]), MAIN_URL);
         const type = href.includes("/movie/") ? "movie" : fallbackType || "anime";
 
-        // Query attributes injected into elements for external data mapping engines
         const malId = attr(element, ["data-mal", "data-id"]);
         const slug = attr(element, ["data-slug"]) || href.split("/").pop();
         const timestamp = attr(element, ["data-timestamp"]) || String(Date.now());
@@ -109,9 +110,16 @@
                 const res = await http_get(targetUrl, HEADERS);
                 if (!res || !res.body) return null;
 
-                const doc = await parseHtml(res.body);
-                // standard card list layouts across anime streaming architectures
-                const cards = qsa(doc, ".ani-card, .item, article, .flw-item");
+                // Checking if the widget responds inside a JSON wrapper or pure HTML strings
+                let htmlContent = res.body;
+                const json = safeParse(res.body);
+                if (json && json.html) {
+                    htmlContent = json.html;
+                }
+
+                const doc = await parseHtml(htmlContent);
+                // Class targeting expanded to include generic stremio/anime boilerplate elements (.flw-item)
+                const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .item-anime");
                 const items = cards.map(c => toMedia(c, section.type)).filter(Boolean);
 
                 return { name: section.name, items };
@@ -135,7 +143,7 @@
             if (!res || !res.body) return cb({ success: true, data: [] });
 
             const doc = await parseHtml(res.body);
-            const cards = qsa(doc, ".ani-card, .item, article, .flw-item");
+            const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .item-anime");
             const items = cards.map(c => toMedia(c, "anime")).filter(Boolean);
 
             cb({ success: true, data: items });
@@ -153,9 +161,9 @@
             if (!res || !res.body) throw new Error("Failed to load root item data view container.");
 
             const doc = await parseHtml(res.body);
-            const title = text(qs(doc, "h1, .name")?.textContent) || "Unknown Anime";
-            const poster = fixUrl(attr(qs(doc, ".poster img, .ani-poster img"), ["src"]), metaInput.url);
-            const description = text(qs(doc, ".description, .overview")?.textContent);
+            const title = text(qs(doc, "h1, .name, .film-name")?.textContent) || "Unknown Anime";
+            const poster = fixUrl(attr(qs(doc, ".poster img, .ani-poster img, .film-poster img"), ["src"]), metaInput.url);
+            const description = text(qs(doc, ".description, .overview, .film-description")?.textContent);
 
             const result = new MultimediaItem({
                 title,
@@ -172,12 +180,11 @@
                     url: urlStr
                 })];
             } else {
-                // Find episode listing selectors inside DOM matching anichi specifications
-                const epElements = qsa(doc, ".episodes-list a, .ep-item, #episodes sequential a");
+                const epElements = qsa(doc, ".episodes-list a, .ep-item, #episodes a, .ssl-item");
                 if (epElements.length > 0) {
                     result.episodes = epElements.map((el, i) => {
                         const href = fixUrl(attr(el, ["href"]), metaInput.url);
-                        const epNum = parseInt(attr(el, ["data-number"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
+                        const epNum = parseInt(attr(el, ["data-number", "data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
                         return new Episode({
                             name: text(el.textContent) || `Episode ${epNum}`,
                             url: JSON.stringify({
@@ -190,7 +197,6 @@
                         });
                     });
                 } else {
-                    // Injecting structural fallback episode if dynamically rendered later
                     result.episodes = [new Episode({
                         name: "Episode 1",
                         url: urlStr,
@@ -213,11 +219,10 @@
 
             const streams = [];
 
-            // Stage 1: Intercept standard HTML internal video server player references
             const htmlRes = await http_get(target.url, HEADERS);
             if (htmlRes && htmlRes.body) {
                 const doc = await parseHtml(htmlRes.body);
-                const iframes = qsa(doc, "iframe, #player-iframe");
+                const iframes = qsa(doc, "iframe, #player-iframe, .player-iframe");
                 for (const iframe of iframes) {
                     const src = fixUrl(attr(iframe, ["src"]), target.url);
                     if (src && !src.includes("about:blank")) {
@@ -231,7 +236,6 @@
                 }
             }
 
-            // Stage 2: Direct query against External Consolidated KuMapper Endpoint Data Structure Mapping Layer
             if (target.malId && target.slug && target.timestamp) {
                 const mapperUrl = `${MAPPER_BASE}${encodeURIComponent(target.malId)}/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.timestamp)}`;
                 try {
@@ -239,7 +243,6 @@
                     const mapperData = safeParse(mapperRes?.body);
                     
                     if (mapperData && typeof mapperData === "object") {
-                        // Iterate unified sub/dub servers consolidated by KuMapper mapping arrays
                         Object.keys(mapperData).forEach((sourceKey) => {
                             if (sourceKey === "status") return;
                             const entry = mapperData[sourceKey];
@@ -266,7 +269,6 @@
                 }
             }
 
-            // Deduplicate matching targets discovered inside extraction pipes
             const seen = {};
             const finalStreams = streams.filter(s => {
                 const key = `${s.url}|${s.source}`;
@@ -281,7 +283,6 @@
         }
     }
 
-    // Export plugin definitions globally to integration engine layer
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
