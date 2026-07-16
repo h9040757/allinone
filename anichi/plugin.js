@@ -1,285 +1,313 @@
-(function () {
-    // --- Configuration & Constants ---
-    const MAIN_URL = "https://anichi.to";
-    const MAPPER_BASE = "https://mapper.nekostream.site/api/mal/";
-    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-    const HEADERS = {
-        "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": MAIN_URL + "/",
-        "X-Requested-With": "XMLHttpRequest"
+(function() {
+    "use strict";
+
+    var BASE_URL = (typeof manifest !== "undefined" && manifest && manifest.baseUrl) || "https://anichi.to";
+    var IMG_URL = "https://anichi.to";
+
+    var API_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": BASE_URL + "/home",
+        "Cookie": "country_code=IN; prefered_server_type=sub"
     };
 
-    // We change the structural paths to query the dynamic AJAX widget layer directly
-    const HOME_SECTIONS = [
-        { path: "ajax/home/widget/trending?page=1", name: "Trending Anime", type: "anime" },
-        { path: "ajax/home/widget/recent-sub?page=1", name: "Recently Updated (SUB)", type: "anime" },
-        { path: "ajax/home/widget/recent-dub?page=1", name: "Recently Updated (DUB)", type: "anime" },
-        { path: "ajax/home/widget/movie?page=1", name: "Anime Movies", type: "movie" }
-    ];
+    var POST_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": BASE_URL + "/",
+        "Origin": BASE_URL
+    };
 
-    // --- Utility Methods ---
-    function text(value) {
-        return (value == null ? "" : String(value)).replace(/\s+/g, " ").trim();
+    function absUrl(path) {
+        if (!path) return "";
+        if (/^https?:\/\//i.test(path)) return path;
+        if (path.indexOf("//") === 0) return "https:" + path;
+        return IMG_URL + path;
     }
 
-    function safeParse(data) {
-        if (!data) return null;
-        if (typeof data === "object") return data;
-        try { return JSON.parse(data); } catch (e) { return null; }
-    }
-
-    function qsa(root, selector) {
-        try { return Array.from(root.querySelectorAll(selector)); } catch (e) { return []; }
-    }
-
-    function qs(root, selector) {
-        try { return root.querySelector(selector); } catch (e) { return null; }
-    }
-
-    function attr(el, names) {
-        if (!el) return "";
-        for (const name of names) {
-            const value = el.getAttribute(name);
-            if (value && !String(value).startsWith("data:image")) return String(value).trim();
+    function parseJsonSafe(text, fallback) {
+        try {
+            return JSON.parse(String(text || ""));
+        } catch (e) {
+            return fallback;
         }
-        return "";
     }
 
-    function fixUrl(raw, base) {
-        if (!raw) return "";
-        const url = String(raw).trim();
-        if (!url || url.startsWith("data:")) return "";
-        if (url.startsWith("//")) return "https:" + url;
-        if (/^https?:\/\//i.test(url)) return url;
-        try { return new URL(url, base || MAIN_URL).href; } catch (e) { return url; }
+    function cleanHtml(value) {
+        return String(value || "")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&#039;/g, "'")
+            .replace(/&nbsp;/g, " ")
+            .replace(/<br\s*\/?>/gi, "\n")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim();
     }
 
-    function qualityFromText(value) {
-        const raw = String(value || "").toLowerCase();
-        if (/2160p|4k/i.test(raw)) return 2160;
-        if (/1080p|fhd/i.test(raw)) return 1080;
-        if (/720p|hd/i.test(raw)) return 720;
-        if (/480p|sd/i.test(raw)) return 480;
-        return 720;
+    function guessType(typeText) {
+        typeText = String(typeText || "").toLowerCase();
+        if (typeText.indexOf("movie") !== -1) return "movie";
+        return "anime";
     }
 
-    async function mapLimit(items, limit, worker) {
-        const list = items || [];
-        const output = new Array(list.length);
-        let cursor = 0;
-        async function run() {
-            while (cursor < list.length) {
-                const index = cursor++;
-                try { output[index] = await worker(list[index], index); } catch (e) { output[index] = null; }
+    async function httpGetJson(url, customHeaders) {
+        try {
+            var res = await http_get(url, customHeaders || API_HEADERS);
+            var body = res && (res.body || res.text) ? String(res.body || res.text) : "";
+            return parseJsonSafe(body, null);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function httpGetText(url, customHeaders) {
+        try {
+            var res = await http_get(url, customHeaders || API_HEADERS);
+            return res && (res.body || res.text) ? String(res.body || res.text) : "";
+        } catch (e) {
+            return "";
+        }
+    }
+
+    function parseCardsFromHtml(html) {
+        var cards = [];
+        // Matches common card structures inside Zoro/HiAnime/Anichi clones
+        var cardRegex = /<div\s+class="[^"]*flw-item[^"]*"[\s\S]*?<a\s+href="([^"]+)"\s+class="[^"]*film-poster-ahref[^"]*"[\s\S]*?<img\s+[^>]*(?:data-src|src)="([^"]+)"[\s\S]*?<a\s+[^>]*class="[^"]*dynamic-name[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+        var match;
+        while ((match = cardRegex.exec(html)) !== null) {
+            cards.push(new MultimediaItem({
+                title: cleanHtml(match[3]),
+                url: absUrl(match[1]),
+                posterUrl: absUrl(match[2]),
+                type: "anime"
+            }));
+        }
+
+        if (cards.length === 0) {
+            // General fallback matching logic
+            var fallbackRegex = /<a\s+href="(\/watch\/[^"]+)"[^>]*>[\s\S]*?<img\s+[^>]*(?:data-src|src)="([^"]+)"[\s\S]*?alt="([^"]+)"/gi;
+            while ((match = fallbackRegex.exec(html)) !== null) {
+                cards.push(new MultimediaItem({
+                    title: cleanHtml(match[3]),
+                    url: absUrl(match[1]),
+                    posterUrl: absUrl(match[2]),
+                    type: "anime"
+                }));
             }
         }
-        const workers = [];
-        for (let i = 0; i < Math.min(limit, list.length); i++) workers.push(run());
-        await Promise.all(workers);
-        return output;
+        return cards;
     }
-
-    function toMedia(element, fallbackType) {
-        const link = qs(element, "a");
-        const href = fixUrl(attr(link, ["href"]), MAIN_URL);
-        const title = text(qs(element, ".title, .name, h2, h3, .film-name")?.textContent);
-        if (!title || !href) return null;
-        
-        const poster = fixUrl(attr(qs(element, "img"), ["data-src", "src"]), MAIN_URL);
-        const type = href.includes("/movie/") ? "movie" : fallbackType || "anime";
-
-        const malId = attr(element, ["data-mal", "data-id"]);
-        const slug = attr(element, ["data-slug"]) || href.split("/").pop();
-        const timestamp = attr(element, ["data-timestamp"]) || String(Date.now());
-
-        return new MultimediaItem({
-            title,
-            url: JSON.stringify({ url: href, malId, slug, timestamp, type }),
-            posterUrl: poster,
-            type
-        });
-    }
-
-    // --- Core Hooks ---
 
     async function getHome(cb) {
         try {
-            const sections = await mapLimit(HOME_SECTIONS, 4, async (section) => {
-                const targetUrl = `${MAIN_URL}/${section.path}`;
-                const res = await http_get(targetUrl, HEADERS);
-                if (!res || !res.body) return null;
+            var result = {};
 
-                // Checking if the widget responds inside a JSON wrapper or pure HTML strings
-                let htmlContent = res.body;
-                const json = safeParse(res.body);
-                if (json && json.html) {
-                    htmlContent = json.html;
-                }
-
-                const doc = await parseHtml(htmlContent);
-                // Class targeting expanded to include generic stremio/anime boilerplate elements (.flw-item)
-                const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .item-anime");
-                const items = cards.map(c => toMedia(c, section.type)).filter(Boolean);
-
-                return { name: section.name, items };
-            });
-
-            const data = {};
-            for (const s of sections) {
-                if (s && s.items.length) data[s.name] = s.items;
+            // 1. Scrape Featured/Trending from Home Page
+            var homeHtml = await httpGetText(BASE_URL + "/home");
+            var trending = parseCardsFromHtml(homeHtml);
+            if (trending.length) {
+                result["Trending"] = trending.slice(0, 24);
             }
 
-            cb({ success: true, data });
-        } catch (e) {
-            cb({ success: false, errorCode: "HOME_ERROR", message: e.message || String(e) });
-        }
-    }
-
-    async function search(query, cb) {
-        try {
-            const targetUrl = `${MAIN_URL}/search?keyword=${encodeURIComponent(query)}`;
-            const res = await http_get(targetUrl, HEADERS);
-            if (!res || !res.body) return cb({ success: true, data: [] });
-
-            const doc = await parseHtml(res.body);
-            const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .item-anime");
-            const items = cards.map(c => toMedia(c, "anime")).filter(Boolean);
-
-            cb({ success: true, data: items });
-        } catch (e) {
-            cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message || String(e) });
-        }
-    }
-
-    async function load(urlStr, cb) {
-        try {
-            const metaInput = safeParse(urlStr);
-            if (!metaInput || !metaInput.url) throw new Error("Invalid structure data parameters.");
-
-            const res = await http_get(metaInput.url, HEADERS);
-            if (!res || !res.body) throw new Error("Failed to load root item data view container.");
-
-            const doc = await parseHtml(res.body);
-            const title = text(qs(doc, "h1, .name, .film-name")?.textContent) || "Unknown Anime";
-            const poster = fixUrl(attr(qs(doc, ".poster img, .ani-poster img, .film-poster img"), ["src"]), metaInput.url);
-            const description = text(qs(doc, ".description, .overview, .film-description")?.textContent);
-
-            const result = new MultimediaItem({
-                title,
-                url: urlStr,
-                posterUrl: poster,
-                description,
-                type: metaInput.type,
-                episodes: []
-            });
-
-            if (metaInput.type === "movie") {
-                result.episodes = [new Episode({
-                    name: title,
-                    url: urlStr
-                })];
-            } else {
-                const epElements = qsa(doc, ".episodes-list a, .ep-item, #episodes a, .ssl-item");
-                if (epElements.length > 0) {
-                    result.episodes = epElements.map((el, i) => {
-                        const href = fixUrl(attr(el, ["href"]), metaInput.url);
-                        const epNum = parseInt(attr(el, ["data-number", "data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
-                        return new Episode({
-                            name: text(el.textContent) || `Episode ${epNum}`,
-                            url: JSON.stringify({
-                                ...metaInput,
-                                url: href,
-                                epNumber: epNum
-                            }),
-                            season: 1,
-                            episode: epNum
-                        });
-                    });
-                } else {
-                    result.episodes = [new Episode({
-                        name: "Episode 1",
-                        url: urlStr,
-                        season: 1,
-                        episode: 1
-                    })];
+            // 2. Load "Recently Updated" from widget endpoint
+            var updatedWidget = await httpGetJson(BASE_URL + "/ajax/home/widget/updated-all?page=1");
+            if (updatedWidget && updatedWidget.html) {
+                var updatedItems = parseCardsFromHtml(updatedWidget.html);
+                if (updatedItems.length) {
+                    result["Recently Updated"] = updatedItems;
                 }
             }
 
             cb({ success: true, data: result });
         } catch (e) {
-            cb({ success: false, errorCode: "LOAD_ERROR", message: e.message || String(e) });
+            cb({ success: false, errorCode: "HOME_ERROR", message: String(e.message || e) });
         }
     }
 
-    async function loadStreams(urlInfo, cb) {
+    async function search(query, cb) {
         try {
-            const target = safeParse(urlInfo);
-            if (!target || !target.url) throw new Error("Invalid stream verification structure.");
+            if (!query || !query.trim()) return cb({ success: true, data: [] });
+            var searchUrl = BASE_URL + "/search?keyword=" + encodeURIComponent(query.trim());
+            var html = await httpGetText(searchUrl);
+            var items = parseCardsFromHtml(html);
+            cb({ success: true, data: items });
+        } catch (e) {
+            cb({ success: false, errorCode: "SEARCH_ERROR", message: String(e.message || e) });
+        }
+    }
 
-            const streams = [];
+    async function load(url, cb) {
+        try {
+            var html = await httpGetText(url);
+            
+            // Extract Anichi's internal anime ID (used for retrieving AJAX episode lists)
+            var idMatch = html.match(/data-id=["'](\d+)["']/i) || html.match(/id=["']watch-main["']\s+data-id=["'](\d+)["']/i);
+            if (!idMatch) throw new Error("Anichi anime reference ID not found.");
+            var animeId = idMatch[1];
 
-            const htmlRes = await http_get(target.url, HEADERS);
-            if (htmlRes && htmlRes.body) {
-                const doc = await parseHtml(htmlRes.body);
-                const iframes = qsa(doc, "iframe, #player-iframe, .player-iframe");
-                for (const iframe of iframes) {
-                    const src = fixUrl(attr(iframe, ["src"]), target.url);
-                    if (src && !src.includes("about:blank")) {
-                        streams.push(new StreamResult({
-                            url: src,
-                            source: "Internal Player Mirror",
-                            quality: 720,
-                            headers: { "User-Agent": UA, "Referer": target.url }
-                        }));
-                    }
+            var titleMatch = html.match(/<h2\s+class="[^"]*film-name[^"]*"[^>]*>([\s\S]*?)<\/h2>/i) 
+                          || html.match(/<title>([\s\S]*?)<\/title>/i);
+            var title = titleMatch ? cleanHtml(titleMatch[1]).replace(/Watch Anime Online.*/i, "") : "Anime";
+            
+            var posterMatch = html.match(/<img\s+[^>]*class="[^"]*film-poster-img[^"]*"[^>]*(?:data-src|src)="([^"]+)"/i);
+            var poster = posterMatch ? absUrl(posterMatch[1]) : "";
+
+            var descMatch = html.match(/<div\s+class="[^"]*text[^"]*">([\s\S]*?)<\/div>/i);
+            var description = descMatch ? cleanHtml(descMatch[1]) : "";
+
+            // Retrieve episodes list from Anichi's API
+            var epJson = await httpGetJson(BASE_URL + "/ajax/v2/episode/list/" + animeId);
+            var episodes = [];
+
+            if (epJson && epJson.html) {
+                var epRegex = /<a\s+[^>]*href="([^"]+)"\s+data-id="(\d+)"\s+title="([^"]+)"\s+class="[^"]*ep-item[^"]*"[^>]*>[\s\S]*?\<span\s+class="ss-no">(\d+)<\/span>/gi;
+                var match;
+                while ((match = epRegex.exec(epJson.html)) !== null) {
+                    var epNum = Number(match[4]) || episodes.length + 1;
+                    episodes.push(new Episode({
+                        name: cleanHtml(match[3]) || ("Episode " + epNum),
+                        url: JSON.stringify({ watchUrl: absUrl(match[1]), episodeId: match[2], episodeNum: epNum }),
+                        season: 1,
+                        episode: epNum,
+                        posterUrl: poster,
+                        headers: { "Referer": BASE_URL + "/" }
+                    }));
                 }
             }
 
-            if (target.malId && target.slug && target.timestamp) {
-                const mapperUrl = `${MAPPER_BASE}${encodeURIComponent(target.malId)}/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.timestamp)}`;
-                try {
-                    const mapperRes = await http_get(mapperUrl, { "User-Agent": UA, "Accept": "application/json" });
-                    const mapperData = safeParse(mapperRes?.body);
-                    
-                    if (mapperData && typeof mapperData === "object") {
-                        Object.keys(mapperData).forEach((sourceKey) => {
-                            if (sourceKey === "status") return;
-                            const entry = mapperData[sourceKey];
-                            if (!entry || typeof entry !== "object") return;
-
-                            ["sub", "dub"].forEach((bucket) => {
-                                const stream = entry[bucket];
-                                if (!stream || !stream.url) return;
-
-                                const resolvedUrl = fixUrl(stream.url);
-                                const sourceLabel = sourceKey.charAt(0).toUpperCase() + sourceKey.slice(1);
-
-                                streams.push(new StreamResult({
-                                    url: resolvedUrl,
-                                    source: `KuMapper (${sourceLabel} - ${bucket.toUpperCase()})`,
-                                    quality: qualityFromText(resolvedUrl),
-                                    headers: { "User-Agent": UA }
-                                }));
-                            });
-                        });
-                    }
-                } catch (err) {
-                    console.error("[KuMapper Extraction Loop Interrupted]", err);
-                }
+            if (!episodes.length) {
+                episodes.push(new Episode({
+                    name: "Episode 1",
+                    url: JSON.stringify({ watchUrl: url, episodeId: animeId, episodeNum: 1 }),
+                    season: 1,
+                    episode: 1,
+                    posterUrl: poster,
+                    headers: { "Referer": BASE_URL + "/" }
+                }));
             }
 
-            const seen = {};
-            const finalStreams = streams.filter(s => {
-                const key = `${s.url}|${s.source}`;
-                if (seen[key]) return false;
-                seen[key] = true;
-                return true;
+            var item = new MultimediaItem({
+                title: title,
+                url: url,
+                posterUrl: poster,
+                type: guessType(title),
+                description: description,
+                headers: { "Referer": BASE_URL + "/" },
+                episodes: episodes
             });
 
-            cb({ success: true, data: finalStreams });
+            cb({ success: true, data: item });
         } catch (e) {
-            cb({ success: false, errorCode: "STREAM_ERROR", message: e.message || String(e) });
+            cb({ success: false, errorCode: "LOAD_ERROR", message: String(e.message || e) });
+        }
+    }
+
+    function normalizeSubtitles(tracks) {
+        if (!tracks || !Array.isArray(tracks) || !tracks.length) return [];
+        var out = [];
+        var seen = {};
+        for (var i = 0; i < tracks.length; i++) {
+            var t = tracks[i];
+            var url = t.url || t.file || t.src || "";
+            if (!url || seen[url]) continue;
+            seen[url] = true;
+            var label = t.label || t.name || t.lang || t.language || "English";
+            var lang = t.language || t.srclang || t.lang || "en";
+            out.push({ url: url, label: label, lang: lang });
+        }
+        return out;
+    }
+
+    async function loadStreams(data, cb) {
+        try {
+            var episodeId = null;
+            var watchUrl = BASE_URL + "/home";
+
+            if (typeof data === "object" && data !== null) {
+                episodeId = data.episodeId;
+                watchUrl = data.watchUrl || watchUrl;
+            } else if (typeof data === "string") {
+                var parsed = parseJsonSafe(data, null);
+                if (parsed && parsed.episodeId) {
+                    episodeId = parsed.episodeId;
+                    watchUrl = parsed.watchUrl || watchUrl;
+                } else {
+                    throw new Error("Episode payload needs mapping with episodeId and watchUrl");
+                }
+            }
+
+            if (!episodeId) throw new Error("Missing active episode ID context.");
+
+            // Fetch list of available streaming servers from Anichi
+            var serverListJson = await httpGetJson(BASE_URL + "/ajax/v2/episode/servers?episodeId=" + episodeId);
+            var streams = [];
+
+            if (serverListJson && serverListJson.html) {
+                // Parse server configurations (subbed/dubbed instances)
+                var serverRegex = /<div\s+[^>]*class="[^"]*server-item[^"]*"\s+data-id="(\d+)"\s+data-type="([^"]+)"[^>]*>([\s\S]*?)<\/div>/gi;
+                var match;
+                while ((match = serverRegex.exec(serverListJson.html)) !== null) {
+                    var serverId = match[1];
+                    var type = match[2].toUpperCase(); // SUB or DUB
+                    var serverName = cleanHtml(match[3]) || "Server";
+
+                    // Fetch sources info endpoint for specific server
+                    var sourceJson = await httpGetJson(BASE_URL + "/ajax/v2/episode/sources?id=" + serverId);
+                    if (sourceJson && sourceJson.link) {
+                        var embedUrl = sourceJson.link;
+
+                        // Resolve Megaplay source integrations directly
+                        if (/megaplay\.buzz/i.test(embedUrl)) {
+                            var idMatch = embedUrl.match(/id=(\d+)/) || embedUrl.match(/\/s-\d+\/(\d+)/);
+                            var mediaId = idMatch ? idMatch[1] : "";
+                            if (mediaId) {
+                                var sourcesUrl = "https://megaplay.buzz/stream/getSourcesNew?id=" + mediaId;
+                                var hostHeaders = {
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+                                    "Referer": embedUrl
+                                };
+                                var streamData = await httpGetJson(sourcesUrl, hostHeaders);
+                                if (streamData && streamData.sources) {
+                                    var sourcesList = Array.isArray(streamData.sources) ? streamData.sources : [streamData.sources];
+                                    for (var s = 0; s < sourcesList.length; s++) {
+                                        var src = sourcesList[s];
+                                        if (src.file || src.url) {
+                                            var subtitles = normalizeSubtitles(streamData.tracks || streamData.subtitles);
+                                            var stream = new StreamResult({
+                                                url: src.file || src.url,
+                                                source: "Anichi Megaplay [" + type + "] (" + serverName + ")",
+                                                headers: hostHeaders
+                                            });
+                                            if (subtitles.length) stream.subtitles = subtitles;
+                                            streams.push(stream);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Standard stream entry fallback if redirecting to generic iframe
+                            streams.push(new StreamResult({
+                                url: embedUrl,
+                                source: "Anichi [" + type + "] (" + serverName + ")",
+                                headers: { "Referer": BASE_URL + "/" }
+                            }));
+                        }
+                    }
+                }
+            }
+
+            if (!streams.length) throw new Error("No playback streams found.");
+
+            cb({ success: true, data: streams });
+        } catch (e) {
+            cb({ success: false, errorCode: "STREAM_ERROR", message: String(e.message || e) });
         }
     }
 
