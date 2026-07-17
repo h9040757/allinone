@@ -1,23 +1,27 @@
 (function () {
     // --- Configuration & Constants ---
-    const MAIN_URL = "https://anichi.to";
+    const BASE_URL = "https://anichi.to";
     const MAPPER_BASE = "https://mapper.nekostream.site/api/mal/";
-    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
     
-    // Configured matching headers derived from strict browser networking logs
-    const HEADERS = {
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0";
+    const COOKIE_STRING = "country_code=IN; prefered_server_type=sub; prefered_server_id=8e4";
+
+    const API_HEADERS = {
         "User-Agent": UA,
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
-        "Referer": MAIN_URL + "/home"
+        "Referer": BASE_URL + "/home",
+        "Origin": BASE_URL,
+        "Cookie": COOKIE_STRING
     };
 
-    // Updated architectural categories containing structural target points
-    const HOME_SECTIONS = [
-        { path: "ajax/home/widget/updated-all?page=1", name: "Recently Updated (All)", type: "anime", isAjax: true },
-        { path: "trending", name: "Trending Anime", type: "anime", isAjax: false },
-        { path: "movie", name: "Anime Movies", type: "movie", isAjax: false }
-    ];
+    const HTML_HEADERS = {
+        "User-Agent": UA,
+        "Accept": "text/html",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": BASE_URL + "/",
+        "Cookie": COOKIE_STRING
+    };
 
     // --- Utility Methods ---
     function text(value) {
@@ -53,7 +57,7 @@
         if (!url || url.startsWith("data:")) return "";
         if (url.startsWith("//")) return "https:" + url;
         if (/^https?:\/\//i.test(url)) return url;
-        try { return new URL(url, base || MAIN_URL).href; } catch (e) { return url; }
+        try { return new URL(url, base || BASE_URL).href; } catch (e) { return url; }
     }
 
     function qualityFromText(value) {
@@ -61,6 +65,7 @@
         if (/2160p|4k/i.test(raw)) return 2160;
         if (/1080p|fhd/i.test(raw)) return 1080;
         if (/720p|hd/i.test(raw)) return 720;
+        if (/480p|sd/i.test(raw)) return 480;
         return 720;
     }
 
@@ -80,53 +85,65 @@
         return output;
     }
 
-    function toMedia(element, fallbackType) {
-        const link = qs(element, "a");
-        const href = fixUrl(attr(link, ["href"]), MAIN_URL);
-        const title = text(qs(element, ".title, .name, .film-name, h2, h3")?.textContent);
-        if (!title || !href) return null;
-        
-        const poster = fixUrl(attr(qs(element, "img"), ["data-src", "src"]), MAIN_URL);
-        const type = href.includes("/movie/") ? "movie" : fallbackType || "anime";
+    async function parseHtmlResponseIntoItems(htmlStr, fallbackType) {
+        if (!htmlStr) return [];
+        const doc = await parseHtml(htmlStr);
+        const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .item-list");
+        return cards.map(c => {
+            const link = qs(c, "a");
+            const href = fixUrl(attr(link, ["href"]), BASE_URL);
+            const title = text(qs(c, ".title, .name, h2, h3, .film-name")?.textContent);
+            if (!title || !href) return null;
 
-        const malId = attr(element, ["data-mal", "data-id"]);
-        const slug = attr(element, ["data-slug"]) || href.split("/").pop();
-        const timestamp = attr(element, ["data-timestamp"]) || String(Date.now());
+            const poster = fixUrl(attr(qs(c, "img"), ["data-src", "src"]), BASE_URL);
+            const type = href.includes("/movie/") ? "movie" : fallbackType || "anime";
 
-        return new MultimediaItem({
-            title,
-            url: JSON.stringify({ url: href, malId, slug, timestamp, type }),
-            posterUrl: poster,
-            type
-        });
+            const malId = attr(c, ["data-mal", "data-id"]);
+            const slug = attr(c, ["data-slug"]) || href.split("/").pop();
+            const timestamp = attr(c, ["data-timestamp"]) || String(Date.now());
+
+            return new MultimediaItem({
+                title,
+                url: JSON.stringify({ url: href, malId, slug, timestamp, type }),
+                posterUrl: poster,
+                type
+            });
+        }).filter(Boolean);
     }
 
     // --- Core Hooks ---
 
     async function getHome(cb) {
         try {
-            const sections = await mapLimit(HOME_SECTIONS, 3, async (section) => {
-                const targetUrl = `${MAIN_URL}/${section.path}`;
-                const res = await http_get(targetUrl, HEADERS);
+            const WIDGET_SECTIONS = [
+                { endpoint: "/ajax/home/widget/trending?page=1", name: "Trending Anime", isApi: true, type: "anime" },
+                { endpoint: "/ajax/home/widget/updated-sub", name: "Latest Updated (SUB)", isApi: true, type: "anime" },
+                { endpoint: "/ajax/home/widget/updated-dub?page=1", name: "Latest Updated (DUB)", isApi: true, type: "anime" },
+                { endpoint: "/ajax/home/widget/updated-all", name: "Latest Episodes (ALL)", isApi: true, type: "anime" },
+                { endpoint: "/status/not-yet-aired", name: "Upcoming Anime", isApi: false, type: "anime" },
+                { endpoint: "/latest-updated", name: "Latest Updated", isApi: false, type: "anime" },
+                { endpoint: "/new-release", name: "New Release", isApi: false, type: "anime" },
+                { endpoint: "/most-viewed", name: "Most Viewed", isApi: false, type: "movie" }
+            ];
+
+            const sections = await mapLimit(WIDGET_SECTIONS, 4, async (sec) => {
+                const targetUrl = `${BASE_URL}${sec.endpoint}`;
+                const headers = sec.isApi ? API_HEADERS : HTML_HEADERS;
+                
+                const res = await http_get(targetUrl, headers);
                 if (!res || !res.body) return null;
 
-                let HTMLContent = "";
-                if (section.isAjax) {
-                    const parsedJson = safeParse(res.body);
-                    // Extracting string elements returned by direct AJAX data blocks
-                    HTMLContent = parsedJson && parsedJson.html ? parsedJson.html : "";
+                let items = [];
+                if (sec.isApi) {
+                    // Stremio/AJAX widgets typically return a JSON block containing HTML structure fragments
+                    const json = safeParse(res.body);
+                    const htmlContent = json && (json.html || json.content || json.data) ? (json.html || json.content || json.data) : res.body;
+                    items = await parseHtmlResponseIntoItems(htmlContent, sec.type);
                 } else {
-                    HTMLContent = res.body;
+                    items = await parseHtmlResponseIntoItems(res.body, sec.type);
                 }
 
-                if (!HTMLContent) return null;
-
-                const doc = await parseHtml(HTMLContent);
-                // Scrapes against global structural selectors (flw-item is common inside AJAX loads)
-                const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .film-item");
-                const items = cards.map(c => toMedia(c, section.type)).filter(Boolean);
-
-                return { name: section.name, items };
+                return { name: sec.name, items };
             });
 
             const data = {};
@@ -142,14 +159,12 @@
 
     async function search(query, cb) {
         try {
-            const targetUrl = `${MAIN_URL}/search?keyword=${encodeURIComponent(query)}`;
-            const res = await http_get(targetUrl, { ...HEADERS, "X-Requested-With": undefined });
+            // Evaluates using the official filter interface mapping the dynamic query keyword parameters
+            const targetUrl = `${BASE_URL}/filter?keyword=${encodeURIComponent(query)}`;
+            const res = await http_get(targetUrl, HTML_HEADERS);
             if (!res || !res.body) return cb({ success: true, data: [] });
 
-            const doc = await parseHtml(res.body);
-            const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .film-item");
-            const items = cards.map(c => toMedia(c, "anime")).filter(Boolean);
-
+            const items = await parseHtmlResponseIntoItems(res.body, "anime");
             cb({ success: true, data: items });
         } catch (e) {
             cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message || String(e) });
@@ -159,13 +174,13 @@
     async function load(urlStr, cb) {
         try {
             const metaInput = safeParse(urlStr);
-            if (!metaInput || !metaInput.url) throw new Error("Invalid structure data parameters.");
+            if (!metaInput || !metaInput.url) throw new Error("Invalid item structure details profile.");
 
-            const res = await http_get(metaInput.url, { ...HEADERS, "X-Requested-With": undefined });
-            if (!res || !res.body) throw new Error("Failed to load root item data view container.");
+            const res = await http_get(metaInput.url, HTML_HEADERS);
+            if (!res || !res.body) throw new Error("Could not populate element target parsing container reference.");
 
             const doc = await parseHtml(res.body);
-            const title = text(qs(doc, "h1, .name, .film-name")?.textContent) || "Unknown Anime";
+            const title = text(qs(doc, "h1, .name, .film-name")?.textContent) || "Unknown Title";
             const poster = fixUrl(attr(qs(doc, ".poster img, .ani-poster img, .film-poster img"), ["src"]), metaInput.url);
             const description = text(qs(doc, ".description, .overview, .film-description")?.textContent);
 
@@ -188,7 +203,7 @@
                 if (epElements.length > 0) {
                     result.episodes = epElements.map((el, i) => {
                         const href = fixUrl(attr(el, ["href"]), metaInput.url);
-                        const epNum = parseInt(attr(el, ["data-number", "data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
+                        const epNum = parseInt(attr(el, ["data-number"]) || attr(el, ["data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (i + 1), 10);
                         return new Episode({
                             name: text(el.textContent) || `Episode ${epNum}`,
                             url: JSON.stringify({
@@ -219,11 +234,12 @@
     async function loadStreams(urlInfo, cb) {
         try {
             const target = safeParse(urlInfo);
-            if (!target || !target.url) throw new Error("Invalid stream verification structure.");
+            if (!target || !target.url) throw new Error("Failed validation parameters loop inside dynamic stream block.");
 
             const streams = [];
 
-            const htmlRes = await http_get(target.url, { ...HEADERS, "X-Requested-With": undefined });
+            // Method 1: Extraction of inline servers inside target page structure
+            const htmlRes = await http_get(target.url, HTML_HEADERS);
             if (htmlRes && htmlRes.body) {
                 const doc = await parseHtml(htmlRes.body);
                 const iframes = qsa(doc, "iframe, #player-iframe, .player-iframe");
@@ -232,7 +248,7 @@
                     if (src && !src.includes("about:blank")) {
                         streams.push(new StreamResult({
                             url: src,
-                            source: "Internal Player Mirror",
+                            source: "Standard Internal Player",
                             quality: 720,
                             headers: { "User-Agent": UA, "Referer": target.url }
                         }));
@@ -240,6 +256,7 @@
                 }
             }
 
+            // Method 2: Consolidation layer querying KuMapper logic
             if (target.malId && target.slug && target.timestamp) {
                 const mapperUrl = `${MAPPER_BASE}${encodeURIComponent(target.malId)}/${encodeURIComponent(target.slug)}/${encodeURIComponent(target.timestamp)}`;
                 try {
@@ -263,7 +280,7 @@
                                     url: resolvedUrl,
                                     source: `KuMapper (${sourceLabel} - ${bucket.toUpperCase()})`,
                                     quality: qualityFromText(resolvedUrl),
-                                    headers: { "User-Agent": UA }
+                                    headers: { "User-Agent": UA, "Cookie": COOKIE_STRING }
                                 }));
                             });
                         });
@@ -273,6 +290,7 @@
                 }
             }
 
+            // Clean duplication elements inside streams result payload array mapping
             const seen = {};
             const finalStreams = streams.filter(s => {
                 const key = `${s.url}|${s.source}`;
@@ -287,7 +305,7 @@
         }
     }
 
-    // Export plugin definitions globally
+    // Register routines globally to match internal interface layer hooks
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
