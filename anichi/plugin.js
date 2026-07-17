@@ -22,47 +22,6 @@
         return value;
     }
 
-    const GA_MEASUREMENT_ID = base64Decode("Ry1IWDFNMEREVjhX");
-    const GA_API_SECRET = base64Decode("ckNZeWhBUXJUaHFLZ2xiNmc4MGRiZw==");
-
-    const SessionTracker = {
-        clientId: null,
-        init() { this.clientId = this.generateUuid(); },
-        generateUuid() {
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                var r = Math.random() * 16 | 0;
-                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-            });
-        }
-    };
-    SessionTracker.init();
-
-    const Analytics = {
-        clientId: null,
-        measurementId: GA_MEASUREMENT_ID,
-        apiSecret: GA_API_SECRET,
-        queue: [],
-        init() { this.clientId = SessionTracker.clientId; },
-        logEvent(eventName, parameters) {
-            console.log('[Analytics] Event: ' + eventName + ' | clientId: ' + this.clientId);
-            if (!this.measurementId || !this.apiSecret) return;
-            this.queue.push({ name: eventName, params: Object.assign({ session_id: this.clientId }, parameters || {}) });
-            this.flushQueue();
-        },
-        async flushQueue() {
-            if (this.queue.length === 0) return;
-            var events = this.queue.splice(0);
-            try {
-                await http_post(
-                    'https://www.google-analytics.com/mp/collect?measurement_id=' + this.measurementId + '&api_secret=' + this.apiSecret,
-                    { 'Content-Type': 'application/json' },
-                    JSON.stringify({ client_id: this.clientId, events: events })
-                );
-            } catch (e) { console.log('[Analytics] Send skipped'); }
-        }
-    };
-    Analytics.init();
-
     // --- Core Architecture Configuration Matrix ---
     var BASE_URL = (((typeof manifest !== "undefined" && manifest && manifest.baseUrl) || "https://anichi.to") + "").replace(/\/+$/, "");
     var USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
@@ -121,6 +80,7 @@
         return "anichipartner:" + base64Encode(JSON.stringify(payload || {}));
     }
 
+    // --- Parser Engine ---
     function unpackPayload(url) {
         var raw = String(url || "");
         if (raw.indexOf("anichipartner:") === 0) {
@@ -180,7 +140,7 @@
                 return cacheSet(TEXT_CACHE, key, String(body || ""));
             } catch (e) {
                 return "";
-            } declare {
+            } finally {
                 delete TEXT_INFLIGHT[key];
             }
         })();
@@ -329,7 +289,6 @@
             }
 
             HOME_CACHE = { value: homeData, time: Date.now() };
-            Analytics.logEvent('anichi_home', {});
             cb({ success: true, data: homeData });
         } catch (e) {
             cb({ success: false, errorCode: "HOME_ERROR", message: String(e.message || e) });
@@ -342,7 +301,6 @@
             if (!query) return cb({ success: true, data: [] });
             var url = BASE_URL + "/filter?keyword=" + encodeURIComponent(query);
             var html = await getText(url, PAGE_HEADERS);
-            Analytics.logEvent('anichi_search', {});
             cb({ success: true, data: parseAnichiCards(html, url) });
         } catch (e) {
             cb({ success: false, errorCode: "SEARCH_ERROR", message: String(e.message || e) });
@@ -411,7 +369,6 @@
                 episodes: episodes
             });
 
-            Analytics.logEvent('anichi_load', {});
             cb({ success: true, data: item });
         } catch (e) {
             cb({ success: false, errorCode: "LOAD_ERROR", message: String(e.message || e) });
@@ -502,7 +459,6 @@
 
             streamResults.sort(function (a, b) { return Number(b.quality || 0) - Number(a.quality || 0); });
             
-            Analytics.logEvent('anichi_loadstreams', {});
             cb({ success: true, data: streamResults });
         } catch (error) {
             cb({ success: false, errorCode: "STREAM_ERROR", message: String(error.message || error) });
