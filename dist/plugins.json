@@ -1,22 +1,24 @@
 [
   {
-    "packageName": "to.anichi.skystream.plugin",
-    "name": "Anichi",
-    "version": 1,
-    "baseUrl": "https://anichi.to",
-    "description": "Adapter plugin for Anichi with KuMapper stream group consolidation layer.",
+    "packageName": "com.igris.repo.anisuge",
+    "name": "AniSuge",
+    "version": 4,
+    "baseUrl": "https://anisuge.tv",
+    "domains": [
+      "https://anisuge.tv"
+    ],
+    "description": "A Varient for animewave",
     "authors": [
-      "Developer"
+      "IGRIS"
     ],
     "languages": [
-      "en"
+      "en",
+      "ja"
     ],
     "categories": [
-      "Anime",
-      "Movies",
-      "Series"
+      "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/to.anichi.skystream.plugin.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/com.igris.repo.anisuge.sky"
   },
   {
     "packageName": "me.kartoons.skystream",
