@@ -1,24 +1,23 @@
 [
   {
-    "packageName": "com.igris.repo.anisuge",
-    "name": "AniSuge",
-    "version": 4,
-    "baseUrl": "https://anisuge.tv",
-    "domains": [
-      "https://anisuge.tv"
-    ],
-    "description": "A Varient for animewave",
+    "packageName": "to.anichi.skystream.plugin",
+    "name": "Anichi",
+    "version": 13,
+    "baseUrl": "https://anichi.to",
+    "description": "Anichi plugin modeled after the deterministic parsing structure.",
     "authors": [
-      "IGRIS"
+      "Developer"
     ],
     "languages": [
       "en",
       "ja"
     ],
     "categories": [
-      "Anime"
+      "Anime",
+      "Movie",
+      "Series"
     ],
-    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/com.igris.repo.anisuge.sky"
+    "url": "https://raw.githubusercontent.com/h9040757/allinone/main/dist/to.anichi.skystream.plugin.sky"
   },
   {
     "packageName": "me.kartoons.skystream",
