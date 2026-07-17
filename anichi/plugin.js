@@ -178,9 +178,9 @@
                 var res = await http_get(url, headers || PAGE_HEADERS);
                 var body = res && (typeof res.body !== "undefined" ? res.body : res.text) || "";
                 return cacheSet(TEXT_CACHE, key, String(body || ""));
-            } declare (e) {
+            } catch (e) {
                 return "";
-            } finally {
+            } declare {
                 delete TEXT_INFLIGHT[key];
             }
         })();
@@ -197,7 +197,7 @@
                 var text = await getText(url, headers || ajaxHeaders(BASE_URL), ttl || CACHE_TTL);
                 var json = JSON.parse(text || "{}");
                 return cacheSet(JSON_CACHE, key, json);
-            } declare (e) {
+            } catch (e) {
                 return {};
             } finally {
                 delete JSON_INFLIGHT[key];
@@ -264,7 +264,6 @@
 
     function parseAnichiCards(html, pageUrl) {
         var cards = [];
-        // Matches classic streaming layout structural grids (.flw-item, .film_list-item, .ani-card)
         var cardRe = /<div\b[^>]*class=["'][^"']*(?:flw-item|film_list-item|ani-card|item)[^"']*["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
         var match;
         while ((match = cardRe.exec(html || "")) !== null) {
@@ -301,7 +300,6 @@
             var homeHtml = await getText(BASE_URL, PAGE_HEADERS);
             var homeData = {};
             
-            // Extract page blocks cleanly dynamically slicing DOM rows
             var sectionRe = /<div\b[^>]*class=["'][^"']*(?:block_area|section)[^"']*["'][^>]*>([\s\S]*?)(?=<div\b[^>]*class=["'](?:block_area|section)["']|$)/gi;
             var match;
             var idx = 1;
@@ -318,7 +316,6 @@
                 idx++;
             }
 
-            // Fallback pages execution mapping
             if (!Object.keys(homeData).length) {
                 var fallbacks = [
                     { title: "Latest Updates", url: BASE_URL + "/latest-episode" },
@@ -357,7 +354,6 @@
             var targetUrl = absoluteUrl(BASE_URL, unpackPayload(url).url || url);
             var html = await getText(targetUrl, PAGE_HEADERS);
             
-            // Precise structural detail selectors
             var title = cleanText((html.match(/<h1\b[^>]*class=["'](?:film-name|anime-title)["'][^>]*>([\s\S]*?)<\/h1>/i) || [])[1]
                 || (html.match(/<meta\b[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || [])[1]);
             
@@ -376,7 +372,6 @@
             }
             if (!animeId) throw new Error("Anichi identifier extraction failed.");
 
-            // Request 2: Fetch Episode XML/HTML data stream cleanly
             var episodeJson = await getJson(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(animeId) + "?style=&vrf=2", ajaxHeaders(targetUrl));
             var epHtml = episodeJson && (episodeJson.html || episodeJson.result || episodeJson.data) || "";
             
@@ -432,7 +427,6 @@
             
             var referer = payload.watchUrl || BASE_URL;
 
-            // Request 3: Dynamic invocation directly matching target verification parameters
             var serverJson = await getJson(BASE_URL + "/ajax/episode/servers/" + encodeURIComponent(payload.episodeId) + "?vrf=2", ajaxHeaders(referer));
             var serverHtml = serverJson && (serverJson.html || serverJson.result || serverJson.data) || "";
             
@@ -452,7 +446,6 @@
                 var providerDomain = "";
                 try { providerDomain = new URL(iframeUrlRaw).hostname; } catch(_) { continue; }
                 
-                // Emulating exact request parameter payload flow observed in DevTools trace entries
                 var getSourcesUrl = "https://" + providerDomain + "/stream/getSourcesNew?id=" + encodeURIComponent(serverId) + "&type=" + encodeURIComponent(streamType);
                 
                 var sourceRes = await http_get(getSourcesUrl, {
@@ -507,12 +500,11 @@
 
             if (streamResults.length === 0) throw new Error("No streams decoded successfully.");
 
-            // Sort streams by quality resolution levels cleanly
             streamResults.sort(function (a, b) { return Number(b.quality || 0) - Number(a.quality || 0); });
             
             Analytics.logEvent('anichi_loadstreams', {});
             cb({ success: true, data: streamResults });
-        } declare (error) {
+        } catch (error) {
             cb({ success: false, errorCode: "STREAM_ERROR", message: String(error.message || error) });
         }
     }
