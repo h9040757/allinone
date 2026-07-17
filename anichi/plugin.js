@@ -4,26 +4,23 @@
     const VIDTUBE_BASE = "https://vidtube.site";
     const MEGAPLAY_BASE = "https://megaplay.buzz";
 
-    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-    const COOKIE_STRING = "country_code=IN; prefered_server_type=sub; prefered_server_id=8e4";
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0";
 
     const API_HEADERS = {
         "User-Agent": UA,
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
         "Referer": BASE_URL + "/",
-        "Origin": BASE_URL,
-        "Cookie": COOKIE_STRING
+        "Origin": BASE_URL
     };
 
     const HTML_HEADERS = {
         "User-Agent": UA,
         "Accept": "text/html",
-        "Referer": BASE_URL + "/",
-        "Cookie": COOKIE_STRING
+        "Referer": BASE_URL + "/"
     };
 
-    // --- Utility Parsers ---
+    // --- Utility Methods ---
     function text(value) {
         return (value == null ? "" : String(value)).replace(/\s+/g, " ").trim();
     }
@@ -146,7 +143,6 @@
 
     async function load(urlStr, cb) {
         try {
-            // Step 1: Request root HTML item landing page configuration parameters
             const res = await http_get(urlStr, HTML_HEADERS);
             if (!res || !res.body) throw new Error("Item landing container unavailable.");
 
@@ -155,9 +151,15 @@
             const poster = fixUrl(attr(qs(doc, ".poster img, .film-poster img"), ["src"]), urlStr);
             const description = text(qs(doc, ".description, .overview")?.textContent);
 
-            // Extract tracking IDs embedded inside the document wrapper elements
-            const animeId = attr(qs(doc, "[data-anime-id], #data-anime"), ["data-anime-id", "data-id", "value"]);
-            const watchOrderId = attr(qs(doc, "[data-watch-order]"), ["data-watch-order"]);
+            // FIX 1: Robust extraction layer for Anime ID (DOM checking + Regex checking)
+            let animeId = attr(qs(doc, "[data-anime-id]"), ["data-anime-id"]);
+            if (!animeId) {
+                const match = res.body.match(/anime_id["']?\s*[:=]\s*["']?(\d+)/i);
+                if (match) animeId = match[1];
+            }
+            if (!animeId) {
+                throw new Error("Anime ID not found.");
+            }
 
             const mediaItem = new MultimediaItem({
                 title,
@@ -168,26 +170,19 @@
                 episodes: []
             });
 
-            if (!animeId) {
-                // Movie structure or raw fallback mapping path
-                mediaItem.episodes = [new Episode({ name: title, url: JSON.stringify({ parentUrl: urlStr, type: "movie" }) })];
-                return cb({ success: true, data: mediaItem });
-            }
-
-            // Step 2: Query secure AJAX routing table to resolve individual structural ep node entries
             const epApiUrl = `${BASE_URL}/ajax/episode/list/${animeId}?style=&vrf=2`;
             const epRes = await http_get(epApiUrl, API_HEADERS);
-            if (!epRes || !epRes.body) throw new Error("Failed validation tracking episode listing table route.");
+            if (!epRes || !epRes.body) throw new Error("Failed to load tracking episode listing table route.");
 
             const epJson = safeParse(epRes.body);
             const epHtml = epJson && (epJson.html || epJson.content) ? (epJson.html || epJson.content) : epRes.body;
             const epDoc = await parseHtml(epHtml);
             
-            // Map links containing specific targeting server tracking arrays
-            const epLinks = qsa(epDoc, "a.ep-item, .ss-list a");
+            // FIX 2: Expanded, safer adaptive node selector matching for episodes
+            const epLinks = qsa(epDoc, "a.ep-item, .ss-list a, [data-episode-id], [data-id]");
             if (epLinks.length > 0) {
                 mediaItem.episodes = epLinks.map((el, idx) => {
-                    const number = parseInt(attr(el, ["data-number", "data-ep"]) || (idx + 1), 10);
+                    const number = parseInt(attr(el, ["data-number", "data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (idx + 1), 10);
                     const epId = attr(el, ["data-id", "data-episode-id"]);
                     return new Episode({
                         name: text(el.textContent) || `Episode ${number}`,
@@ -213,8 +208,9 @@
 
             const streams = [];
 
-            // Fetch structural list servers associated directly with tracking context identifiers
-            const serverFetchUrl = `${BASE_URL}/ajax/episode/servers?id=${params.epId || params.animeId}&vrf=2`;
+            // CRITICAL ACTION & FIX 1: Exact DevTools mapping route setup to match your browser captures
+            // Update the string literal here once verified via the DevTools network tab (e.g., `/server/`, `/servers/`)
+            const serverFetchUrl = `${BASE_URL}/ajax/episode/server/${params.epId}?vrf=2`;
             const serverRes = await http_get(serverFetchUrl, API_HEADERS);
             if (!serverRes || !serverRes.body) throw new Error("Secure server map allocation list empty.");
 
@@ -222,8 +218,8 @@
             const sHtml = sJson && (sJson.html || sJson.content) ? (sJson.html || sJson.content) : serverRes.body;
             const sDoc = await parseHtml(sHtml);
 
-            // Scrape targeted endpoints referencing specialized internal multi-hop video mirrors
-            const serverNodes = qsa(sDoc, "[data-server-id], [data-id]");
+            // FIX 10: Expanded Server Node selectors supporting multiple page layouts
+            const serverNodes = qsa(sDoc, "[data-server-id], [data-id], .server-item, .server");
             
             await mapLimit(serverNodes, 3, async (node) => {
                 const serverId = attr(node, ["data-id", "data-server-id"]);
@@ -231,30 +227,44 @@
                 
                 if (!serverId) return;
 
+                // FIX 4: Dynamically capture the stream mode from element configurations instead of guessing
+                const mode = attr(node, ["data-type", "data-sub"]) || "sub";
+
                 try {
-                    // Route 1: Mirror operational tracking parameters using Vidtube architecture engines
-                    if (serverName.includes("vidtube") || serverName.includes("stream")) {
-                        const types = ["sub", "dub", "hsub"];
-                        for (const mode of types) {
-                            const sourceUrl = `${VIDTUBE_BASE}/stream/getSourcesNew?id=${serverId}&type=${mode}`;
-                            const resObj = await http_get(sourceUrl, { "Referer": BASE_URL + "/", "User-Agent": UA });
-                            
-                            const dataObj = safeParse(resObj?.body);
-                            if (dataObj && dataObj.sources) {
-                                processNekostreamPayload(dataObj, `Vidtube [${mode.toUpperCase()}]`, streams);
-                            }
+                    // FIX 3: Strict engine matching isolation loops (removed collision-prone general "stream" strings)
+                    if (serverName.includes("vidtube")) {
+                        const iframeUrl = `${VIDTUBE_BASE}/stream/${serverId}/${mode}?autostart=true`;
+                        const sourceUrl = `${VIDTUBE_BASE}/stream/getSourcesNew?id=${serverId}&type=${mode}`;
+                        
+                        // FIX 2 & FIX 4: Synchronized dynamic validation headers passing the dynamic iframe referer
+                        const headers = {
+                            "User-Agent": UA,
+                            "Referer": iframeUrl,
+                            "X-Requested-With": "XMLHttpRequest"
+                        };
+                        
+                        const resObj = await http_get(sourceUrl, headers);
+                        const dataObj = safeParse(resObj?.body);
+                        if (dataObj) {
+                            processNekostreamPayload(dataObj, "Vidtube", streams);
                         }
                     } 
-                    // Route 2: Mirror operational tracking parameters using MegaPlay configuration architecture
-                    else if (serverName.includes("mega") || serverName.includes("play")) {
-                        const domainCheckUrl = `${MEGAPLAY_BASE}/domains?h=${Date.now()}`;
-                        await http_get(domainCheckUrl, { "Referer": MEGAPLAY_BASE + "/", "User-Agent": UA });
-
-                        const sourceUrl = `${MEGAPLAY_BASE}/stream/getSourcesNew?id=${serverId}`;
-                        const resObj = await http_get(sourceUrl, { "Referer": MEGAPLAY_BASE + "/", "User-Agent": UA });
+                    else if (serverName.includes("megaplay")) {
+                        const iframeUrl = `${MEGAPLAY_BASE}/stream/s-5/${serverId}/${mode}?autostart=true`;
                         
+                        // FIX 5: Multi-parameter query array cloning logic to pass exactly matching structures (?id=X&id=X)
+                        const sourceUrl = `${MEGAPLAY_BASE}/stream/getSourcesNew?id=${serverId}&id=${serverId}`;
+                        
+                        // FIX 3 & FIX 4: Target structural headers validation maps matching accurate MegaPlay structures
+                        const headers = {
+                            "User-Agent": UA,
+                            "Referer": iframeUrl,
+                            "X-Requested-With": "XMLHttpRequest"
+                        };
+
+                        const resObj = await http_get(sourceUrl, headers);
                         const dataObj = safeParse(resObj?.body);
-                        if (dataObj && dataObj.sources) {
+                        if (dataObj) {
                             processNekostreamPayload(dataObj, "MegaPlay", streams);
                         }
                     }
@@ -263,27 +273,7 @@
                 }
             });
 
-            if (streams.length === 0) {
-                // Fallback: Scrape raw internal structural inline frame parameters if external engine collection fails
-                const landingRes = await http_get(params.parentUrl, HTML_HEADERS);
-                if (landingRes && landingRes.body) {
-                    const lDoc = await parseHtml(landingRes.body);
-                    const iframes = qsa(lDoc, "iframe");
-                    for (const iframe of iframes) {
-                        const srcUrl = fixUrl(attr(iframe, ["src"]), params.parentUrl);
-                        if (srcUrl && !srcUrl.includes("about:blank")) {
-                            streams.push(new StreamResult({
-                                url: srcUrl,
-                                source: "Internal Native Player",
-                                quality: 720,
-                                headers: { "User-Agent": UA, "Referer": params.parentUrl }
-                            }));
-                        }
-                    }
-                }
-            }
-
-            // Deduplicate references matching matching signatures found inside operational pipelines
+            // Clean duplication elements inside streams result payload array mapping
             const seen = {};
             const uniqueStreams = streams.filter(s => {
                 const key = `${s.url}|${s.source}`;
@@ -292,6 +282,11 @@
                 return true;
             });
 
+            // FIX 9: Throw clear error state if array validation yields no active streams
+            if (!uniqueStreams.length) {
+                throw new Error("No playable streams found.");
+            }
+
             cb({ success: true, data: uniqueStreams });
         } catch (e) {
             cb({ success: false, errorCode: "STREAM_ERROR", message: e.message || String(e) });
@@ -299,14 +294,25 @@
     }
 
     function processNekostreamPayload(rootData, engineLabel, outputStreamArray) {
-        const sources = rootData.sources || [];
-        const tracks = rootData.tracks || rootData.captions || [];
+        // FIX 6: Robust exception handling layer against encrypted string payloads or format shifts
+        if (rootData.encrypted) {
+            throw new Error("Encrypted sources block triggered.");
+        }
+        if (!rootData || !Array.isArray(rootData.sources)) {
+            throw new Error("Invalid sources layout format returned.");
+        }
 
-        // Build cleanly unified subtitles format tracks list targeting cross-site assets configurations
+        const sources = rootData.sources;
+        
+        // FIX 7: Dynamic structural tracking across standard multiple configuration properties
+        const tracks = rootData.tracks || rootData.captions || rootData.subtitle_tracks || [];
+
         const parsedSubtitles = tracks.map(t => {
             if (!t.file && !t.url) return null;
+            // FIX 7: Expanded translation configurations object maps passing clean identifiers
             return {
-                name: t.label || t.name || "English",
+                label: t.label || "English",
+                lang: t.language || t.lang || "en",
                 url: fixUrl(t.file || t.url)
             };
         }).filter(Boolean);
@@ -315,17 +321,21 @@
             if (!src.file && !src.url) return;
             const streamFinalUrl = fixUrl(src.file || src.url);
             
-            // Lock and cross-authenticate stream connection mapping references exactly to host protocols
+            // FIX 8: Robust non-destructive integer normalization map parsing 
+            const match = (src.label || "").match(/\d+/);
+            const qualityScore = match ? Number(match[0]) : 720;
+
+            // FIX 6: Track and inject the strict source provider into final media tracking headers
             const streamHeaders = {
                 "User-Agent": UA,
-                "Referer": streamFinalUrl.includes("vidtube") ? "https://vidtube.site/" : "https://megaplay.buzz/",
-                "Origin": streamFinalUrl.includes("vidtube") ? "https://vidtube.site" : "https://megaplay.buzz"
+                "Referer": engineLabel.startsWith("Vidtube") ? "https://vidtube.site/" : "https://megaplay.buzz/",
+                "Origin": engineLabel.startsWith("Vidtube") ? "https://vidtube.site" : "https://megaplay.buzz"
             };
 
             const resultItem = new StreamResult({
                 url: streamFinalUrl,
-                source: `${engineLabel} (${src.label || "Auto HLS"})`,
-                quality: src.label ? (parseInt(src.label.match(/\b(360|480|720|1080|2160)\b/)?.[1], 10) || 720) : 720,
+                source: `${engineLabel} (${src.label || "Auto"})`,
+                quality: qualityScore,
                 headers: streamHeaders
             });
 
