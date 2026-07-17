@@ -1,399 +1,295 @@
 (function () {
-    // --- Configuration & Constants ---
-    const BASE_URL = "https://anichi.to";
-    const VIDTUBE_BASE = "https://vidtube.site";
-    const MEGAPLAY_BASE = "https://megaplay.buzz";
+    // =========================================================================
+    // DEVTOOLS CONFIGURATION MATRIX (Fill these in exactly from your browser)
+    // =========================================================================
+    const CONFIG = {
+        // [Cookies caught in your network panel]
+        COOKIE_STRING: "country_code=IN; prefered_server_type=sub; prefered_server_id=323; prefered_source_type=sub;",
+        
+        // [The precise endpoints checked in your network tab]
+        ENDPOINTS: {
+            SEARCH_ROUTE: "/filter", // Verify if /filter or /search is used by your browser
+            EPISODE_LIST: "/ajax/episode/list/", // Exact base route before the ID concatenation
+            SERVER_LIST: "/ajax/episode/servers/" // Exact base route before the Ep ID concatenation
+        },
 
-    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0";
+        // [The exact HTML selectors scraped from the live DOM inspect panel]
+        SELECTORS: {
+            // Home & Catalog Card Elements
+            CARD_ITEM: ".flw-item", 
+            CARD_ANCHOR: "a.film-poster-ahref",
+            CARD_TITLE: ".film-name a",
+            CARD_POSTER: "img.film-poster",
 
-    const API_HEADERS = {
-        "User-Agent": UA,
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": BASE_URL + "/",
-        "Origin": BASE_URL
+            // Meta Details Panel Elements
+            META_TITLE: "h1.film-name",
+            META_DESC: ".film-description .text",
+            META_POSTER: "img.film-poster",
+            META_BANNER: ".cover_follow",
+            
+            // Critical Identification Selectors
+            ANIME_ID_CONTAINER: "#syncData", // The DOM element holding the ID attribute
+            ANIME_ID_ATTR: "data-id",        // e.g., 'data-id', 'value', 'movie-id'
+            
+            // Episode list structural nodes
+            EPISODE_NODE: ".ep-item",        // Target specific list elements, not broad 'a' tags
+            EPISODE_ID_ATTR: "data-id",      // Attribute carrying the true numeric episode reference
+            
+            // Server target list element nodes
+            SERVER_NODE: ".server-item",     // Target specific button lists
+            SERVER_ID_ATTR: "data-id",       // Attribute mapped to the server identifier query
+            SERVER_TYPE_ATTR: "data-type",   // e.g., returns 'sub' or 'dub' dynamically
+            SERVER_LINK_ATTR: "data-link"    // Target attribute containing the embed/iframe URL
+        }
     };
 
-    const HTML_HEADERS = {
+    // Global Base Configuration Environment
+    const MAIN_URL = (typeof manifest !== 'undefined' && manifest.baseUrl) || "https://anichi.to";
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
+    
+    const BASE_HEADERS = {
         "User-Agent": UA,
-        "Accept": "text/html",
-        "Referer": BASE_URL + "/"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Cookie": CONFIG.COOKIE_STRING
+    };
+
+    const AJAX_HEADERS = {
+        "User-Agent": UA,
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.5",
+        "X-Requested-With": "XMLHttpRequest",
+        "Cookie": CONFIG.COOKIE_STRING
     };
 
     // --- Core Helper Functions ---
-    function text(value) {
-        return (value == null ? "" : String(value)).replace(/\s+/g, " ").trim();
-    }
+    function text(value) { return (value == null ? "" : String(value)).replace(/\s+/g, " ").trim(); }
+    function safeParse(data) { if (!data) return null; if (typeof data === "object") return data; try { return JSON.parse(data); } catch (e) { return null; } }
+    function asArray(list) { const out = []; if(list) { for (let i = 0; i < list.length; i++) out.push(list[i]); } return out; }
+    function qsa(root, selector) { try { return asArray(root.querySelectorAll(selector)); } catch (e) { return []; } }
+    function qs(root, selector) { try { return root.querySelector(selector); } catch (e) { return null; } }
+    function attr(el, name) { return el ? String(el.getAttribute(name) || "").trim() : ""; }
+    function fixUrl(raw, base) { if (!raw) return ""; const url = String(raw).trim(); if (url.startsWith("//")) return "https:" + url; if (/^https?:\/\//i.test(url)) return url; try { return new URL(url, base || MAIN_URL).href; } catch (e) { return url; } }
 
-    function safeParse(data) {
-        if (!data) return null;
-        if (typeof data === "object") return data;
-        try { return JSON.parse(data); } catch (e) { return null; }
-    }
-
-    function qsa(root, selector) {
-        try { return Array.from(root.querySelectorAll(selector)); } catch (e) { return []; }
-    }
-
-    function qs(root, selector) {
-        try { return root.querySelector(selector); } catch (e) { return null; }
-    }
-
-    function attr(el, names) {
-        if (!el) return "";
-        for (const name of names) {
-            const value = el.getAttribute(name);
-            if (value && !String(value).startsWith("data:image")) return String(value).trim();
-        }
-        return "";
-    }
-
-    function fixUrl(raw, base) {
-        if (!raw) return "";
-        const url = String(raw).trim();
-        if (url.startsWith("//")) return "https:" + url;
-        if (/^https?:\/\//i.test(url)) return url;
-        try { return new URL(url, base || BASE_URL).href; } catch (e) { return url; }
-    }
-
-    async function mapLimit(items, limit, worker) {
-        const list = items || [];
-        const output = new Array(list.length);
-        let cursor = 0;
-        async function run() {
-            while (cursor < list.length) {
-                const index = cursor++;
-                try { output[index] = await worker(list[index], index); } catch (e) { output[index] = null; }
-            }
-        }
-        const workers = [];
-        for (let i = 0; i < Math.min(limit, list.length); i++) workers.push(run());
-        await Promise.all(workers);
-        return output;
-    }
-
-    async function parseHtmlItems(htmlStr) {
-        if (!htmlStr) return [];
-        const doc = await parseHtml(htmlStr);
-        const cards = qsa(doc, ".ani-card, .item, article, .flw-item, .film_list-item");
-        return cards.map(c => {
-            const link = qs(c, "a");
-            const href = fixUrl(attr(link, ["href"]), BASE_URL);
-            const title = text(qs(c, ".title, .name, h2, h3, .film-name")?.textContent);
-            if (!title || !href) return null;
-
-            return new MultimediaItem({
-                title,
-                url: href,
-                posterUrl: fixUrl(attr(qs(c, "img"), ["data-src", "src"]), BASE_URL),
-                type: href.includes("/movie/") ? "movie" : "anime"
-            });
-        }).filter(Boolean);
-    }
-
-    // --- SkyStream Hooks ---
+    // --- Core SkyStream Integration Hooks ---
 
     async function getHome(cb) {
         try {
-            const SECTIONS = [
-                { endpoint: "/ajax/home/widget/trending?page=1", name: "Trending Anime", isApi: true },
-                { endpoint: "/ajax/home/widget/updated-sub", name: "Updated (SUB)", isApi: true },
-                { endpoint: "/ajax/home/widget/updated-dub?page=1", name: "Updated (DUB)", isApi: true },
-                { endpoint: "/ajax/home/widget/updated-all", name: "Updated (ALL)", isApi: true },
-                { endpoint: "/status/not-yet-aired", name: "Upcoming Anime", isApi: false },
-                { endpoint: "/latest-updated", name: "Latest Updated", isApi: false },
-                { endpoint: "/new-release", name: "New Release", isApi: false },
-                { endpoint: "/most-viewed", name: "Most Viewed", isApi: false }
-            ];
-
-            const results = await mapLimit(SECTIONS, 4, async (sec) => {
-                const res = await http_get(BASE_URL + sec.endpoint, sec.isApi ? API_HEADERS : HTML_HEADERS);
-                if (!res || !res.body) return null;
-
-                let htmlContent = res.body;
-                if (sec.isApi) {
-                    const json = safeParse(res.body);
-                    htmlContent = json && (json.html || json.content || json.data) ? (json.html || json.content || json.data) : res.body;
-                }
-                
-                const items = await parseHtmlItems(htmlContent);
-                return { name: sec.name, items };
-            });
-
+            const html = await http_get(MAIN_URL, BASE_HEADERS);
+            const doc = await parseHtml(html.body || "");
             const data = {};
-            for (const r of results) {
-                if (r && r.items.length) data[r.name] = r.items;
-            }
+
+            const sections = qsa(doc, ".block_area");
+            sections.forEach((section, idx) => {
+                const titleText = text(qs(section, ".block_area-heading")?.textContent) || `Catalog Row ${idx + 1}`;
+                const cards = qsa(section, CONFIG.SELECTORS.CARD_ITEM);
+                
+                const items = cards.map(card => {
+                    const link = qs(card, CONFIG.SELECTORS.CARD_ANCHOR);
+                    const href = fixUrl(attr(link, "href"), MAIN_URL);
+                    const title = text(qs(card, CONFIG.SELECTORS.CARD_TITLE)?.textContent || link?.textContent);
+                    if (!href || !title) return null;
+
+                    const poster = fixUrl(attr(qs(card, CONFIG.SELECTORS.CARD_POSTER), "src"), MAIN_URL);
+                    return new MultimediaItem({
+                        title,
+                        url: JSON.stringify({ url: href, poster: poster }),
+                        posterUrl: poster,
+                        type: "series"
+                    });
+                }).filter(Boolean);
+
+                if (items.length > 0) data[titleText] = items;
+            });
 
             cb({ success: true, data });
         } catch (e) {
-            cb({ success: false, errorCode: "HOME_ERROR", message: e.message || String(e) });
+            cb({ success: false, errorCode: "HOME_ERROR", message: e.message });
         }
     }
 
     async function search(query, cb) {
         try {
-            const res = await http_get(`${BASE_URL}/filter?keyword=${encodeURIComponent(query)}`, HTML_HEADERS);
-            const items = await parseHtmlItems(res?.body);
+            const targetUrl = `${MAIN_URL}${CONFIG.ENDPOINTS.SEARCH_ROUTE}?keyword=${encodeURIComponent(query)}`;
+            const response = await http_get(targetUrl, BASE_HEADERS);
+            const doc = await parseHtml(response.body || "");
+            
+            const cards = qsa(doc, CONFIG.SELECTORS.CARD_ITEM);
+            const items = cards.map(card => {
+                const link = qs(card, CONFIG.SELECTORS.CARD_ANCHOR);
+                const href = fixUrl(attr(link, "href"), MAIN_URL);
+                const title = text(qs(card, CONFIG.SELECTORS.CARD_TITLE)?.textContent);
+                if (!href || !title) return null;
+
+                const poster = fixUrl(attr(qs(card, CONFIG.SELECTORS.CARD_POSTER), "src"), MAIN_URL);
+                return new MultimediaItem({
+                    title,
+                    url: JSON.stringify({ url: href, poster: poster }),
+                    posterUrl: poster,
+                    type: "series"
+                });
+            }).filter(Boolean);
+
             cb({ success: true, data: items });
         } catch (e) {
-            cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message || String(e) });
+            cb({ success: false, errorCode: "SEARCH_ERROR", message: e.message });
         }
     }
 
     async function load(urlStr, cb) {
         try {
-            // STEP 1: Fetch and parse metadata completely from the anime landing page
-            const res = await http_get(urlStr, HTML_HEADERS);
-            if (!res || !res.body) throw new Error("Item profile target page could not be loaded.");
+            const payloadInput = safeParse(urlStr) || { url: urlStr };
+            const response = await http_get(payloadInput.url, { ...BASE_HEADERS, "Origin": MAIN_URL });
+            const doc = await parseHtml(response.body || "");
 
-            const doc = await parseHtml(res.body);
-            const title = text(qs(doc, "h1, .film-name, .anime-title")?.textContent) || "Untitled Anime";
-            const poster = fixUrl(attr(qs(doc, ".poster img, .film-poster img, .cover img"), ["src"]), urlStr);
+            const title = text(qs(doc, CONFIG.SELECTORS.META_TITLE)?.textContent) || "Untitled Anime";
+            const description = text(qs(doc, CONFIG.SELECTORS.META_DESC)?.textContent);
+            const poster = fixUrl(attr(qs(doc, CONFIG.SELECTORS.META_POSTER), "src"), payloadInput.url) || payloadInput.poster;
+            const banner = fixUrl(attr(qs(doc, CONFIG.SELECTORS.META_BANNER), "src"), payloadInput.url);
+
+            // Fetch the verified target mapping ID directly out of the defined tag matrix
+            const animeId = attr(qs(doc, CONFIG.SELECTORS.ANIME_ID_CONTAINER), CONFIG.SELECTORS.ANIME_ID_ATTR);
+            if (!animeId) throw new Error(`CRITICAL: Element or attribute mapping failed for [${CONFIG.SELECTORS.ANIME_ID_CONTAINER} -> ${CONFIG.SELECTORS.ANIME_ID_ATTR}]`);
+
+            // Query dynamic AJAX episode list endpoint mirroring browser params exactly
+            const episodeListUrl = `${MAIN_URL}${CONFIG.ENDPOINTS.EPISODE_LIST}${animeId}?style=&vrf=2`;
+            const epRes = await http_get(episodeListUrl, { ...AJAX_HEADERS, "Referer": payloadInput.url });
             
-            // ✅ Accurate extraction of authentic banner image configuration maps
-            const banner = fixUrl(
-                attr(qs(doc, "meta[property='og:image']"), ["content"]) || 
-                attr(qs(doc, ".cover-background, .ani-banner, .banner-bg"), ["style"])?.match(/url\(['"]?(.*?)['"]?\)/)?.[1] || 
-                attr(qs(doc, ".cover img"), ["src"]), 
-                urlStr
-            ) || poster;
-
-            const description = text(qs(doc, ".description, .overview, .film-description, .synopsis")?.textContent);
-            const genres = qsa(doc, ".genres a, .meta-genres a").map(g => text(g.textContent)).filter(Boolean);
-            const status = text(qs(doc, ".meta-status, .status-value")?.textContent).toLowerCase().includes("releasing") ? "ongoing" : "completed";
-
-            // ✅ Accurate target identification parsing rule: selector + regex fallback logic
-            let animeId = attr(qs(doc, "[data-anime-id], [data-id]"), ["data-anime-id", "data-id"]);
-            if (!animeId) {
-                const idMatch = res.body.match(/anime_id["']?\s*[:=]\s*["']?(\d+)/i);
-                if (idMatch) animeId = idMatch[1];
-            }
-            if (!animeId) throw new Error("Anime identification key missing from page target context.");
-
-            const mediaItem = new MultimediaItem({
-                title,
-                url: urlStr,
-                posterUrl: poster,
-                bannerUrl: banner,
-                description,
-                type: urlStr.includes("/movie/") ? "movie" : "anime",
-                genres,
-                status,
-                episodes: []
-            });
-
-            if (mediaItem.type === "movie") {
-                mediaItem.episodes = [new Episode({ 
-                    name: title, 
-                    url: JSON.stringify({ parentUrl: urlStr, type: "movie", animeId: animeId }),
+            const epJson = safeParse(epRes.body) || {};
+            const htmlFragment = epJson.html || epJson.result || epJson.data || String(epRes.body || "");
+            const epDoc = await parseHtml(htmlFragment);
+            
+            const epElements = qsa(epDoc, CONFIG.SELECTORS.EPISODE_NODE);
+            const episodes = epElements.map((el, idx) => {
+                const episodeId = attr(el, CONFIG.SELECTORS.EPISODE_ID_ATTR);
+                const labelText = text(el.textContent);
+                const parsedNum = parseInt(labelText.match(/\d+/)?.[0] || (idx + 1), 10);
+                
+                if (!episodeId) return null;
+                
+                return new Episode({
+                    name: labelText.includes("Episode") ? labelText : `Episode ${labelText}`,
+                    url: JSON.stringify({ episodeId: episodeId, parentWatchUrl: payloadInput.url }),
+                    episode: parsedNum,
                     season: 1,
-                    episode: 1
-                })];
-                return cb({ success: true, data: mediaItem });
-            }
-
-            // STEP 2: Fetch full asynchronous episode arrays utilizing structural widget pipelines
-            const epApiUrl = `${BASE_URL}/ajax/episode/list/${animeId}?style=&vrf=2`;
-            const epRes = await http_get(epApiUrl, API_HEADERS);
-            if (!epRes || !epRes.body) throw new Error("Secure episode query mapping returned empty layout metadata.");
-
-            const epJson = safeParse(epRes.body);
-            const epHtml = epJson && (epJson.html || epJson.content) ? (epJson.html || epJson.content) : epRes.body;
-            const epDoc = await parseHtml(epHtml);
-            
-            // ✅ Adaptive selectors mapping precise episode tracking nodes
-            const epLinks = qsa(epDoc, "a.ep-item, .ss-list a, [data-episode-id], [data-id]");
-            
-            if (epLinks.length > 0) {
-                mediaItem.episodes = epLinks.map((el, idx) => {
-                    const number = parseInt(attr(el, ["data-number", "data-ep"]) || text(el.textContent).match(/\d+/)?.[0] || (idx + 1), 10);
-                    const epId = attr(el, ["data-id", "data-episode-id"]);
-                    const epTitle = text(qs(el, ".ep-title, .title")?.textContent) || `Episode ${number}`;
-                    const epDesc = text(qs(el, ".ep-desc, .description")?.textContent) || "";
-                    const epThumb = fixUrl(attr(qs(el, "img"), ["data-src", "src"]), urlStr) || poster;
-
-                    return new Episode({
-                        name: epTitle,
-                        description: epDesc,
-                        posterUrl: epThumb,
-                        url: JSON.stringify({ parentUrl: urlStr, epId: epId, episodeNumber: number, animeId: animeId }),
-                        season: 1,
-                        episode: number
-                    });
+                    posterUrl: poster
                 });
-            } else {
-                mediaItem.episodes = [new Episode({ 
-                    name: "Episode 1", 
-                    url: JSON.stringify({ parentUrl: urlStr, animeId: animeId }), 
-                    season: 1, 
-                    episode: 1 
-                })];
-            }
+            }).filter(Boolean);
 
-            cb({ success: true, data: mediaItem });
+            cb({
+                success: true,
+                data: new MultimediaItem({
+                    title, url: urlStr, posterUrl: poster, bannerUrl: banner, description, type: "series", episodes: episodes
+                })
+            });
         } catch (e) {
-            cb({ success: false, errorCode: "LOAD_ERROR", message: e.message || String(e) });
+            cb({ success: false, errorCode: "LOAD_ERROR", message: e.message });
         }
     }
 
     async function loadStreams(urlInfo, cb) {
         try {
-            const params = safeParse(urlInfo);
-            if (!params) throw new Error("Invalid parameters verification payload signature parsing loop.");
+            const transactionContext = safeParse(urlInfo);
+            if (!transactionContext || !transactionContext.episodeId) throw new Error("Context processing failed: Missing episodeId context identifier.");
 
-            const streams = [];
+            // Target the dynamic server matching structure route perfectly
+            const serverApiUrl = `${MAIN_URL}${CONFIG.ENDPOINTS.SERVER_LIST}${transactionContext.episodeId}?vrf=2`;
+            const serverRes = await http_get(serverApiUrl, {
+                ...AJAX_HEADERS,
+                "Referer": transactionContext.parentWatchUrl || MAIN_URL,
+                "Origin": MAIN_URL
+            });
 
-            // ✅ CRITICAL DIRECT FIX: Verified REST endpoint mirroring browser behavior exactly
-            const serverFetchUrl = `${BASE_URL}/ajax/episode/server/${params.epId}?vrf=2`;
-            const serverRes = await http_get(serverFetchUrl, API_HEADERS);
-            if (!serverRes || !serverRes.body) throw new Error("Unified internal routing table list missing.");
-
-            const sJson = safeParse(serverRes.body);
-            const sHtml = sJson && (sJson.html || sJson.content) ? (sJson.html || sJson.content) : serverRes.body;
-            const sDoc = await parseHtml(sHtml);
-
-            // ✅ Explicit layout structural processing handling list configurations natively
-            const serverNodes = qsa(sDoc, "[data-server-id], [data-id], .server-item, .server, li");
+            const serverJson = safeParse(serverRes.body) || {};
+            const htmlFragment = serverJson.html || serverJson.result || serverJson.data || String(serverRes.body || "");
+            const serverDoc = await parseHtml(htmlFragment);
             
-            await mapLimit(serverNodes, 3, async (node) => {
-                const serverId = attr(node, ["data-id", "data-server-id"]);
-                const serverName = text(node.textContent).toLowerCase();
+            const nodes = qsa(serverDoc, CONFIG.SELECTORS.SERVER_NODE);
+            const streamResults = [];
+
+            for (const node of nodes) {
+                const serverId = attr(node, CONFIG.SELECTORS.SERVER_ID_ATTR);
+                const streamType = attr(node, CONFIG.SELECTORS.SERVER_TYPE_ATTR) || "sub"; 
+                const explicitEmbedUrl = attr(node, CONFIG.SELECTORS.SERVER_LINK_ATTR);
                 
-                if (!serverId) return;
+                // Deterministic Stream Identifier Choice: use specific explicit embedded tracking or fall back on server list identifier mapping
+                const streamIdentifier = explicitEmbedUrl ? explicitEmbedUrl : serverId;
+                if (!streamIdentifier) continue;
 
-                // ✅ Exact contextual extraction pulling accurate source formats
-                const mode = attr(node, ["data-type", "data-sub"]) || "sub";
+                let providerDomain = "vidtube.site"; // Default template fallback hostname mapping
+                let finalIframeUrl = explicitEmbedUrl;
 
-                try {
-                    // Isolation of Vidtube Engine pipelines
-                    if (serverName.includes("vidtube")) {
-                        const iframeUrl = `${VIDTUBE_BASE}/stream/${serverId}/${mode}?autostart=true`;
-                        const sourceUrl = `${VIDTUBE_BASE}/stream/getSourcesNew?id=${serverId}&type=${mode}`;
-                        
-                        // ✅ Inject correct Origin verification flags matching exact provider expectations
-                        const headers = {
-                            "User-Agent": UA,
-                            "Referer": iframeUrl,
-                            "Origin": "https://vidtube.site",
-                            "X-Requested-With": "XMLHttpRequest"
-                        };
-                        
-                        const resObj = await http_get(sourceUrl, headers);
-                        const dataObj = safeParse(resObj?.body);
-                        if (dataObj) {
-                            processNekostreamPayload(dataObj, "Vidtube", iframeUrl, streams);
-                        }
-                    } 
-                    // Isolation of MegaPlay Engine pipelines
-                    else if (serverName.includes("megaplay")) {
-                        const iframeUrl = `${MEGAPLAY_BASE}/stream/s-5/${serverId}/${mode}?autostart=true`;
-                        
-                        // ✅ Direct dynamic variable synchronization mapping parameter structure arrays explicitly
-                        const sourceUrl = `${MEGAPLAY_BASE}/stream/getSourcesNew?id=${serverId}&type=${mode}`;
-                        
-                        const headers = {
-                            "User-Agent": UA,
-                            "Referer": iframeUrl,
-                            "X-Requested-With": "XMLHttpRequest"
-                        };
-
-                        const resObj = await http_get(sourceUrl, headers);
-                        const dataObj = safeParse(resObj?.body);
-                        if (dataObj) {
-                            processNekostreamPayload(dataObj, "MegaPlay", iframeUrl, streams);
-                        }
-                    }
-                } catch (innerError) {
-                    console.error("Extraction routing error encountered on dynamic loop segment mapping:", innerError);
+                if (explicitEmbedUrl) {
+                    try { providerDomain = new URL(explicitEmbedUrl).hostname; } catch(e) {}
+                } else {
+                    // If serverId acts directly as your file code inside your specific network stream trace logs
+                    finalIframeUrl = `https://${providerDomain}/stream/${streamIdentifier}/${streamType}`;
                 }
-            });
 
-            const seen = {};
-            const uniqueStreams = streams.filter(s => {
-                const key = `${s.url}|${s.source}`;
-                if (seen[key]) return false;
-                seen[key] = true;
-                return true;
-            });
+                // Deterministic network trace emulator endpoint targeting /stream/getSourcesNew directly
+                const getSourcesUrl = `https://${providerDomain}/stream/getSourcesNew?id=${encodeURIComponent(serverId)}&type=${encodeURIComponent(streamType)}`;
+                
+                const response = await http_get(getSourcesUrl, {
+                    "User-Agent": UA,
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": finalIframeUrl,
+                    "Origin": `https://${providerDomain}`,
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-site"
+                });
 
-            // ✅ Explicit structural exception throwing to guarantee visibility inside runtime console loops
-            if (!uniqueStreams.length) {
-                throw new Error("No playable streams found.");
+                const sourceJson = safeParse(response.body);
+                if (!sourceJson || !sourceJson.sources) continue;
+
+                // Handle both variations seamlessly (Object vs Array format payload checks)
+                const sourcesPayload = sourceJson.sources;
+                const sourceItems = Array.isArray(sourcesPayload) ? sourcesPayload : (sourcesPayload.file ? [sourcesPayload] : []);
+                if (sourceItems.length === 0) continue;
+
+                const targetFileUrl = sourceItems[0].file;
+                if (!targetFileUrl) continue;
+
+                // Safely translate subtitles using precise SDK signature naming maps
+                const tracks = (sourceJson.tracks || []).map(track => {
+                    if (!track.file) return null;
+                    return {
+                        label: track.label || "English",
+                        url: fixUrl(track.file, `https://${providerDomain}`)
+                    };
+                }).filter(Boolean);
+
+                const playbackHeaders = {
+                    "User-Agent": UA,
+                    "Origin": `https://${providerDomain}`,
+                    "Referer": `https://${providerDomain}/`,
+                    "Accept": "*/*"
+                };
+
+                const resultStream = new StreamResult({
+                    url: targetFileUrl, // Clean URL passed directly to standard player logic
+                    source: `Anichi - ${providerDomain.replace("www.", "")}`,
+                    quality: sourceItems[0].label ? parseInt(sourceItems[0].label.match(/\d+/)?.[0] || "0", 10) : 0, 
+                    type: /\.m3u8/i.test(targetFileUrl) ? "hls" : "mp4",
+                    headers: playbackHeaders
+                });
+
+                if (tracks.length > 0) {
+                    resultStream.subtitles = tracks;
+                }
+
+                streamResults.push(resultStream);
             }
 
-            cb({ success: true, data: uniqueStreams });
+            if (streamResults.length === 0) throw new Error("No playable tracks successfully decoded from the stream layout query engine.");
+            cb({ success: true, data: streamResults });
         } catch (e) {
-            cb({ success: false, errorCode: "STREAM_ERROR", message: e.message || String(e) });
+            cb({ success: false, errorCode: "STREAM_ERROR", message: e.message });
         }
     }
 
-    // ✅ Re-architected stream conversion worker layer mapping multi-variant response schemas cleanly
-    function processNekostreamPayload(rootData, engineLabel, iframeUrl, outputStreamArray) {
-        if (!rootData) {
-            throw new Error("Invalid structural payload object layer.");
-        }
-        if (rootData.encrypted) {
-            throw new Error("Encrypted verification payload blocked.");
-        }
-
-        // ✅ CRITICAL BUG FIX: Uniform initialization matching both structural objects and clean arrays 
-        let sources = [];
-        if (Array.isArray(rootData.sources)) {
-            sources = rootData.sources;
-        } else if (rootData.sources && typeof rootData.sources === "object") {
-            sources = [rootData.sources];
-        } else {
-            throw new Error("No video sources discovered inside layout array parameters mapping.");
-        }
-        
-        const tracks = rootData.tracks || rootData.captions || rootData.subtitle_tracks || [];
-
-        const parsedSubtitles = tracks.map(t => {
-            if (!t.file && !t.url) return null;
-            // ✅ Multi-key cross validation lookup logic supporting specialized target languages formatting
-            return {
-                label: t.label || "English",
-                lang: t.language || t.srclang || t.lang || "en",
-                url: fixUrl(t.file || t.url)
-            };
-        }).filter(Boolean);
-
-        // ✅ Robust iterator loop blocks mapping dynamic tracking attributes correctly
-        for (const src of sources) {
-            if (!src) continue;
-            
-            // ✅ Expanded query matching checking multi-variant object parameters safely
-            const streamFinalUrl = fixUrl(src.file || src.url || src.src);
-            if (!streamFinalUrl) continue;
-            
-            // ✅ Safety non-destructive formatting calculation: use index 0 if not specified
-            const match = (src.label || "").match(/\d+/);
-            const qualityScore = match ? Number(match[0]) : 0;
-
-            // ✅ Verified Stream Headers configuration routing back directly into domain servers securely
-            const streamHeaders = {
-                "User-Agent": UA,
-                "Referer": engineLabel.startsWith("Vidtube") ? "https://vidtube.site/" : "https://megaplay.buzz/",
-                "Origin": engineLabel.startsWith("Vidtube") ? "https://vidtube.site" : "https://megaplay.buzz"
-            };
-
-            const resultItem = new StreamResult({
-                url: streamFinalUrl,
-                source: `${engineLabel} (${src.label || "HLS Native Stream"})`,
-                quality: qualityScore,
-                headers: streamHeaders
-            });
-
-            if (parsedSubtitles.length > 0) {
-                resultItem.subtitles = parsedSubtitles;
-            }
-
-            outputStreamArray.push(resultItem);
-        }
-    }
-
-    // Register routines globally to match internal interface layer hooks
+    // Assign safe core execution namespaces to global context pipelines
     globalThis.getHome = getHome;
     globalThis.search = search;
     globalThis.load = load;
