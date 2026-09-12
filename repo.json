@@ -1,9 +1,0 @@
-{
-  "name": "All in One",
-  "packageName": "dev.akash.stars",
-  "description": "everything here",
-  "manifestVersion": 1,
-  "pluginLists": [
-    "https://raw.githubusercontent.com/h9040757/allinone/main/dist/plugins.json"
-  ]
-}
