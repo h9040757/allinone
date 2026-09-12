@@ -1,0 +1,6 @@
+{
+  "name": "M3E Canvas",
+  "description": "Sketch Material 3 Expressive screens in the browser, preview in a 3D iPhone Duo foldable model with multilingual localization, and turn them into vibe-coding prompts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
